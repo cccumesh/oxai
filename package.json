@@ -1,0 +1,10 @@
+{
+  "name": "sanjay-aqua-delivery",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sanjay Aqua delivery frontend",
+  "scripts": {
+    "dev": "node app/server.js",
+    "start": "node app/server.js"
+  }
+}
