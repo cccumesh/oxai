@@ -152,7 +152,7 @@ function renderConfig() {
     <main class="wrap">
       <div class="card">
         <h3 style="margin-bottom:8px;color:var(--deep)">Pehle database jodo</h3>
-        <p class="muted" style="margin-bottom:12px">Supabase project banao, SQL Editor mein <b>schema.sql</b> chalao, phir Project Settings → API se URL aur anon key yahan paste karo.</p>
+        <p class="muted" style="margin-bottom:12px">Supabase SQL Editor mein <b>sanjay_aqua_full.sql</b> chalao, phir Project Settings → API se URL aur anon key yahan paste karo.</p>
         <form data-form="config">
           <div class="field"><label>Project URL</label><input name="url" required placeholder="https://xxxx.supabase.co" /></div>
           <div class="field"><label>anon public key</label><input name="key" required placeholder="eyJ..." /></div>

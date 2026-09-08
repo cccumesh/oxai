@@ -576,10 +576,6 @@ function mapCustomer(c) {
   };
 }
 
-export async function registerDevice(name, role) {
-  return addDriverAccount(name);
-}
-
 export async function signupOwner({ username, firmName, password }) {
   const org = await db.signupOrg(normalizeUsername(username), firmName, password);
   db.useAuthToken(org.session_token);
