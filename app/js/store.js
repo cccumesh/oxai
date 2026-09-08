@@ -1,6 +1,7 @@
 import { SETTINGS } from "./seed.js";
 import * as db from "./db.js";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername } from "./auth.js";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js";
+import { t, dateLocale } from "./i18n.js";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -20,7 +21,7 @@ export function parseDate(str) {
 
 export function displayDate(str) {
   const d = parseDate(str);
-  return d.toLocaleDateString("en-IN", {
+  return d.toLocaleDateString(dateLocale(), {
     weekday: "short",
     day: "numeric",
     month: "short",
@@ -41,7 +42,12 @@ function emptyEntry(customer) {
 
 function loadSettings() {
   try {
-    return { ...SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+    return {
+      ...SETTINGS,
+      ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
+      dayStartHour: SETTINGS.dayStartHour,
+      dayDurationHours: SETTINGS.dayDurationHours,
+    };
   } catch {
     return { ...SETTINGS };
   }
@@ -102,15 +108,15 @@ export function getState() {
 }
 
 export function businessDate(now = new Date()) {
-  const start = state.settings.dayStartHour ?? 5;
+  const start = state.settings.dayStartHour ?? 0;
   const d = new Date(now);
   if (d.getHours() < start) d.setDate(d.getDate() - 1);
   return formatDate(d);
 }
 
 export function dayWindow(dateStr) {
-  const startHour = state.settings.dayStartHour ?? 5;
-  const hours = state.settings.dayDurationHours ?? 17;
+  const startHour = state.settings.dayStartHour ?? 0;
+  const hours = state.settings.dayDurationHours ?? 24;
   const start = parseDate(dateStr);
   start.setHours(startHour, 0, 0, 0);
   const end = new Date(start.getTime() + hours * 3600 * 1000);
@@ -164,17 +170,46 @@ export async function load(opts = {}) {
       state.ready = true;
       return state;
     }
-    const device = await db.fetchDevice(session.deviceId);
-    if (!device) {
-      clearSession();
-      state.needsAuth = true;
-      state.device = null;
-      state.org = null;
-      state.ready = true;
-      return state;
+    db.useAuthToken(session.token);
+    getPhoneId();
+    let device = null;
+    try {
+      device = await db.fetchDevice(session.deviceId);
+    } catch {}
+    if (!device && session.role === "owner") {
+      device = await db.listOwnerDevice(session.orgId);
+      if (!device) {
+        device = await db.insertDevice({
+          id: session.deviceId || crypto.randomUUID(),
+          name: session.firmName || "Plant",
+          role: "owner",
+          org_id: session.orgId,
+          login_key: "",
+        });
+      }
+      setSession({ ...session, deviceId: device.id });
     }
+    if (!device) {
+      const me = await db.whoami();
+      if (!me?.missing && !me?.org_id) {
+        clearSession();
+        db.useAuthToken("");
+        state.needsAuth = true;
+        state.device = null;
+        state.org = null;
+        state.ready = true;
+        return state;
+      }
+      device = {
+        id: session.deviceId || me.device_id,
+        name: session.driverName || session.firmName || me.firm_name,
+        role: session.role,
+        org_id: session.orgId || me.org_id,
+      };
+    }
+    await db.bindDevice(device.id);
     if (roleWanted === "owner" && session.role !== "owner") {
-      state.error = "Jar Supply login se Plant dashboard nahi khulega. Logout karke Plant se login karo.";
+      state.error = t("err_role");
       state.device = device;
       state.org = { id: session.orgId, username: session.username, firmName: session.firmName };
       state.ready = true;
@@ -187,7 +222,7 @@ export async function load(opts = {}) {
     }
     state.ready = true;
   } catch (err) {
-    state.error = err.message || "Supabase connect nahi hua";
+    state.error = err.message || t("err_net");
     state.ready = true;
   }
   return state;
@@ -260,8 +295,8 @@ export async function loadOwnerRange(fromDate, toDate) {
 
 export async function addPayment(customerId, { amount, forMonth, paidOn, note }) {
   const rupees = Number(amount) || 0;
-  if (rupees <= 0) throw new Error("Kitne paise aaye, woh likho.");
-  if (!forMonth) throw new Error("Konse mahine ke paise hain, woh chuno.");
+  if (rupees <= 0) throw new Error(t("err_amt"));
+  if (!forMonth) throw new Error(t("err_mon"));
   const row = await db.insertPayment({
     customer_id: customerId,
     org_id: orgId(),
@@ -300,7 +335,7 @@ export function monthLabel(ym) {
   if (!ym || String(ym).length < 7) return ym || "—";
   const [y, m] = String(ym).split("-").map(Number);
   if (!y || !m) return ym;
-  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  return new Date(y, m - 1, 1).toLocaleDateString(dateLocale(), { month: "short", year: "numeric" });
 }
 
 function ymd(v) {
@@ -596,7 +631,9 @@ export async function signupOwner({ username, firmName, password }) {
     firmName: org.firm_name,
     deviceId: device.id,
     token: org.session_token,
+    phoneId: getPhoneId(),
   });
+  await db.bindDevice(device.id);
   state.needsAuth = false;
   state.device = device;
   state.org = { id: org.org_id, username: org.username, firmName: org.firm_name };
@@ -623,7 +660,9 @@ export async function loginOwner({ username, password }) {
     firmName: org.firm_name,
     deviceId: device.id,
     token: org.session_token,
+    phoneId: getPhoneId(),
   });
+  await db.bindDevice(device.id);
   state.needsAuth = false;
   state.device = device;
   state.org = { id: org.org_id, username: org.username, firmName: org.firm_name };
@@ -641,7 +680,9 @@ export async function loginDriverAccount({ username, key }) {
     deviceId: row.device_id,
     driverName: row.driver_name,
     token: row.session_token,
+    phoneId: getPhoneId(),
   });
+  await db.bindDevice(row.device_id);
   state.needsAuth = false;
   state.org = { id: row.org_id, username: row.username, firmName: row.firm_name };
   state.device = await db.fetchDevice(row.device_id);
@@ -651,7 +692,7 @@ export async function loginDriverAccount({ username, key }) {
 
 export async function addDriverAccount(name) {
   const oid = orgId();
-  if (!oid) throw new Error("Pehle owner login karo.");
+  if (!oid) throw new Error(t("err_own"));
   const key = makeDriverKey();
   const row = await db.insertDevice({
     id: crypto.randomUUID(),
@@ -904,17 +945,17 @@ export function periodRange(period = "today", monthKey = "") {
   const d = parseDate(today);
   const y = d.getFullYear();
   const m = pad(d.getMonth() + 1);
-  if (period === "today") return { from: today, to: today, label: "Aaj", period: "today" };
+  if (period === "today") return { from: today, to: today, label: t("today"), period: "today" };
   if (period === "month") {
     return {
       from: `${y}-${m}-01`,
       to: today,
-      label: d.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+      label: d.toLocaleDateString(dateLocale(), { month: "long", year: "numeric" }),
       period: "month",
     };
   }
   if (period === "year") {
-    return { from: `${y}-01-01`, to: today, label: `Saal ${y}`, period: "year" };
+    return { from: `${y}-01-01`, to: today, label: t("year_n", { n: y }), period: "year" };
   }
   if (period === "m" && monthKey) {
     const [yy, mm] = monthKey.split("-").map(Number);
@@ -923,7 +964,7 @@ export function periodRange(period = "today", monthKey = "") {
     if (to > today) to = today;
     return { from: `${monthKey}-01`, to, label: monthKey, period: "m", month: monthKey };
   }
-  return { from: "2020-01-01", to: today, label: "Shuruaat se", period: "all" };
+  return { from: "2020-01-01", to: today, label: t("from_start"), period: "all" };
 }
 
 export function isMonthRegister(range) {

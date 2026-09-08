@@ -1,6 +1,7 @@
 import { saveSupabaseConfig } from "./config.js";
 import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js";
 import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -21,13 +22,24 @@ let keepScroll = false;
 let busy = false;
 let ownerCustQuery = "";
 let userCheckTimer = null;
+let loginWaitUntil = 0;
+
+function loginWaitLeft() {
+  return Math.max(0, Math.ceil((loginWaitUntil - Date.now()) / 1000));
+}
+
+function noteLoginWait(err) {
+  const m = String(err?.message || err || "");
+  const hit = m.match(/(\d+)\s*second/i);
+  if (hit) loginWaitUntil = Date.now() + Number(hit[1]) * 1000;
+}
 
 function pad(n) {
   return String(Math.max(0, Math.floor(n))).padStart(2, "0");
 }
 
 function formatRemain(ms) {
-  if (ms <= 0) return "Din band";
+  if (ms <= 0) return t("day_closed");
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -38,6 +50,7 @@ function formatRemain(ms) {
 function parseHash() {
   const h = (location.hash || "#/").replace(/^#/, "");
   const parts = h.split("/").filter(Boolean);
+  if (parts[0] === "start") return { view: "start" };
   if (parts[0] === "login") {
     return { view: "login", mode: parts[1] === "driver" ? "driver" : "owner" };
   }
@@ -93,12 +106,13 @@ function header({ subtitle, date, showTimer }) {
         </div>
         <div>
           <h1>${firm}</h1>
-          <p>${subtitle || me?.name || "Delivery"}</p>
+          <p>${subtitle || me?.name || t("delivery_man")}</p>
         </div>
         <div class="day-chip">
-          ${session ? `<button type="button" class="logout-btn" data-act="logout">Logout</button>` : ""}
-          <div>${displayDate(date || today)}${isPast ? " · pehla din" : ""}</div>
-          ${isOwnerRoute() ? `<div class="live-dot">Live</div>` : showTimer !== false ? `<div class="timer" data-timer="${date || today}">${isPast ? "Edit allowed" : formatRemain(remain)}</div>` : ""}
+          ${langPicker("mini")}
+          ${session ? `<button type="button" class="logout-btn" data-act="logout">${t("logout")}</button>` : ""}
+          <div>${displayDate(date || today)}${isPast ? " · " + t("first_day") : ""}</div>
+          ${isOwnerRoute() ? `<div class="live-dot">${t("live")}</div>` : showTimer !== false ? `<div class="timer" data-timer="${date || today}">${isPast ? t("edit_allowed") : formatRemain(remain)}</div>` : ""}
         </div>
       </div>
     </header>
@@ -112,7 +126,7 @@ function dayHref(d) {
 function dayStrip(activeDate) {
   const today = businessDate();
   const dates = lastWorkDates(4);
-  const labels = ["Aaj", "Kal", "2 din pehle", "3 din pehle"];
+  const labels = [t("today"), t("yesterday"), t("days_ago_2"), t("days_ago_3")];
   return `
     <div class="day-tabs">
       ${dates.map((d, i) => `
@@ -130,18 +144,18 @@ function bottomNav(active, range) {
     const p = range ? periodPath(range) : "today";
     return `
       <nav class="nav">
-        <a href="#/owner/${p === "today" ? "today" : p}" class="${active === "owner" ? "on" : ""}">Dashboard</a>
-        <a href="#/owner/month" class="${active === "owner-month" ? "on" : ""}">Mahina</a>
-        <a href="#/owner/pending" class="${active === "owner-pending" ? "on" : ""}">Pending</a>
-        <a href="#/owner/sheet/${p}" class="${active === "owner-sheet" ? "on" : ""}">Sheet</a>
+        <a href="#/owner/${p === "today" ? "today" : p}" class="${active === "owner" ? "on" : ""}">${t("dashboard")}</a>
+        <a href="#/owner/month" class="${active === "owner-month" ? "on" : ""}">${t("month")}</a>
+        <a href="#/owner/pending" class="${active === "owner-pending" ? "on" : ""}">${t("pending")}</a>
+        <a href="#/owner/sheet/${p}" class="${active === "owner-sheet" ? "on" : ""}">${t("sheet")}</a>
       </nav>
     `;
   }
   return `
     <nav class="nav nav-3">
-      <a href="#/" class="${active === "home" ? "on" : ""}">Route</a>
-      <a href="#/customers" class="${active === "customers" ? "on" : ""}">Customers</a>
-      <button type="button" data-act="add-open">+ Naya</button>
+      <a href="#/" class="${active === "home" ? "on" : ""}">${t("route")}</a>
+      <a href="#/customers" class="${active === "customers" ? "on" : ""}">${t("customers")}</a>
+      <button type="button" data-act="add-open">${t("new_plus")}</button>
     </nav>
   `;
 }
@@ -167,6 +181,7 @@ function renderConfig() {
 function authShell(inner) {
   return `
     <main class="auth-wrap">
+      ${langPicker()}
       <div class="auth-brand">
         <div class="logo auth-logo" aria-hidden="true">
           <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
@@ -175,39 +190,60 @@ function authShell(inner) {
           </svg>
         </div>
         <h1>Aqua Jar</h1>
-        <p>20 litre delivery · har plant ka apna hisaab</p>
+        <p>${t("brand_tag")}</p>
       </div>
       ${inner}
     </main>
   `;
 }
 
-function renderLogin(mode = "owner") {
-  const driver = mode === "driver";
+function renderWelcome() {
   app.innerHTML = authShell(`
     <div class="auth-card">
+      <h2>${t("start_title")}</h2>
+      <p class="muted" style="margin-bottom:14px">${t("start_hint")}</p>
+      <a class="auth-choice" href="#/signup">
+        <strong>${t("new_account")}</strong>
+        <span>${t("new_account_sub")}</span>
+      </a>
+      <a class="auth-choice alt" href="#/login">
+        <strong>${t("have_account")}</strong>
+        <span>${t("have_account_sub")}</span>
+      </a>
+    </div>
+  `);
+}
+
+function renderLogin(mode = "owner") {
+  const driver = mode === "driver";
+  const wait = loginWaitLeft();
+  app.innerHTML = authShell(`
+    <div class="auth-card">
+      <a class="auth-back" href="#/start">${t("back")}</a>
       <div class="auth-tabs">
-        <a href="#/login" class="${driver ? "" : "on"}">Plant</a>
-        <a href="#/login/driver" class="${driver ? "on" : ""}">Jar Supply</a>
+        <a href="#/login" class="${driver ? "" : "on"}">${t("plant")}</a>
+        <a href="#/login/driver" class="${driver ? "on" : ""}">${t("delivery_man")}</a>
       </div>
       ${driver ? `
-        <h2>Jar Supply login</h2>
-        <p class="muted">Company username + jo key plant ne di</p>
+        <h2>${t("dm_login")}</h2>
+        <p class="muted">${t("dm_login_hint")}</p>
+        ${wait ? `<div class="banner" data-login-wait>${t("wait_prefix")} <b data-wait-sec>${wait}</b> ${t("wait_suffix")}</div>` : ""}
         <form data-form="login-driver">
-          <div class="field"><label>Company username</label><input name="username" required autocomplete="username" placeholder="jaise sanjayaqua" /></div>
-          <div class="field"><label>Supply key</label><input name="key" required autocomplete="off" placeholder="ABCD-EFGH" style="text-transform:uppercase;letter-spacing:0.08em" /></div>
-          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">Login</button>
+          <div class="field"><label>${t("company_user")}</label><input name="username" required autocomplete="username" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
+          <div class="field"><label>${t("login_key")}</label><input name="key" required autocomplete="off" placeholder="ABCD-EFGH" style="text-transform:uppercase;letter-spacing:0.08em" ${wait ? "disabled" : ""} /></div>
+          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px" ${wait ? "disabled" : ""}>${wait ? t("wait_btn") : t("login")}</button>
         </form>
       ` : `
-        <h2>Plant login</h2>
-        <p class="muted">Ek baar login, logout tak yahi rahega</p>
+        <h2>${t("plant_login")}</h2>
+        <p class="muted">${t("plant_login_hint")}</p>
+        ${wait ? `<div class="banner" data-login-wait>${t("wait_prefix")} <b data-wait-sec>${wait}</b> ${t("wait_suffix")}</div>` : ""}
         <form data-form="login-owner">
-          <div class="field"><label>Username</label><input name="username" required autocomplete="username" placeholder="jaise sanjayaqua" /></div>
-          <div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password" minlength="6" /></div>
-          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">Login</button>
+          <div class="field"><label>${t("username")}</label><input name="username" required autocomplete="username" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
+          <div class="field"><label>${t("password")}</label><input name="password" type="password" required autocomplete="current-password" minlength="6" ${wait ? "disabled" : ""} /></div>
+          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px" ${wait ? "disabled" : ""}>${wait ? t("wait_btn") : t("login")}</button>
         </form>
       `}
-      <p class="auth-foot">Nayi company? <a href="#/signup">Account banao</a></p>
+      <p class="auth-foot">${t("new_company_q")} <a href="#/signup">${t("create_account")}</a></p>
     </div>
   `);
 }
@@ -215,21 +251,22 @@ function renderLogin(mode = "owner") {
 function renderSignup() {
   app.innerHTML = authShell(`
     <div class="auth-card">
-      <h2>Nayi company</h2>
-      <p class="muted">Username unique hoga. Firm ka naam baad mein board wala.</p>
+      <a class="auth-back" href="#/start">${t("back")}</a>
+      <h2>${t("new_company")}</h2>
+      <p class="muted">${t("signup_hint")}</p>
       <form data-form="signup">
         <div class="field">
-          <label>Username</label>
+          <label>${t("username")}</label>
           <input name="username" required minlength="3" autocomplete="off" placeholder="sanjayaqua" data-act="user-check" />
           <div class="user-status" id="user-status"></div>
           <div class="user-ideas" id="user-ideas"></div>
         </div>
-        <div class="field"><label>Firm ka naam</label><input name="firm" required minlength="2" placeholder="Sanjay Aqua" /></div>
-        <div class="field"><label>Password</label><input name="password" type="password" required minlength="6" autocomplete="new-password" /></div>
-        <div class="field"><label>Password dubara</label><input name="confirm" type="password" required minlength="6" autocomplete="new-password" /></div>
-        <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">Account banao</button>
+        <div class="field"><label>${t("firm_name")}</label><input name="firm" required minlength="2" placeholder="Sanjay Aqua" /></div>
+        <div class="field"><label>${t("password")}</label><input name="password" type="password" required minlength="6" autocomplete="new-password" /></div>
+        <div class="field"><label>${t("password_again")}</label><input name="confirm" type="password" required minlength="6" autocomplete="new-password" /></div>
+        <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">${t("create_account")}</button>
       </form>
-      <p class="auth-foot">Pehle se account hai? <a href="#/login">Login</a></p>
+      <p class="auth-foot">${t("have_account_q")} <a href="#/login">${t("login")}</a></p>
     </div>
   `);
 }
@@ -240,7 +277,7 @@ function afterPreview(c, e) {
 
 function speakBtn(id) {
   return `
-    <button type="button" class="speak-btn" data-act="speak" data-id="${id}" aria-label="Naam bolo">
+    <button type="button" class="speak-btn" data-act="speak" data-id="${id}" aria-label="${t("speak")}">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
         <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -251,16 +288,16 @@ function speakBtn(id) {
 }
 
 function speakName(text) {
-  const t = String(text || "").trim();
-  if (!t) return;
+  const name = String(text || "").trim();
+  if (!name) return;
   const synth = window.speechSynthesis;
   if (!synth) {
-    alert("Is phone pe naam bolne wala speaker nahi chala.");
+    alert(t("no_speak"));
     return;
   }
   synth.cancel();
-  const u = new SpeechSynthesisUtterance(t);
-  u.lang = "hi-IN";
+  const u = new SpeechSynthesisUtterance(name);
+  u.lang = speakLocale();
   u.rate = 0.92;
   u.pitch = 1;
   synth.speak(u);
@@ -272,20 +309,20 @@ function customerCard(date, id, complete) {
   if (!c || !e) return "";
   const next = afterPreview(c, e);
   if (complete) {
-    const t = e.completedAt ? new Date(e.completedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "";
+    const when = e.completedAt ? new Date(e.completedAt).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }) : "";
     return `
       <article class="card done">
         <div class="cust-name-row">
           <div class="cust-name">${c.name}</div>
           ${speakBtn(id)}
         </div>
-        <div class="pending-box"><b>${c.pendingJars}</b><span>Market mein pending jar</span></div>
+        <div class="pending-box"><b>${c.pendingJars}</b><span>${t("market_pending")}</span></div>
         <div class="done-meta">
-          <span>Dale: ${e.jarsGiven}</span>
-          <span>Utaye: ${e.emptyCollected}</span>
-          <span>${t}</span>
+          <span>${t("given")}: ${e.jarsGiven}</span>
+          <span>${t("picked")}: ${e.emptyCollected}</span>
+          <span>${when}</span>
         </div>
-        <button class="undo" data-act="undo" data-id="${id}">Wapas pending mein</button>
+        <button class="undo" data-act="undo" data-id="${id}">${t("back_pending")}</button>
       </article>
     `;
   }
@@ -306,11 +343,11 @@ function customerCard(date, id, complete) {
       </div>
       <div class="pending-box ${c.pendingJars > 0 ? "hot" : ""}">
         <b>${c.pendingJars}</b>
-        <span>Pending jar — yahan uthana baki</span>
+        <span>${t("pending_here")}</span>
       </div>
       <div class="counters">
         <div class="counter">
-          <label>Kitne jar diye</label>
+          <label>${t("jars_given")}</label>
           <div class="stepper">
             <button class="minus" data-act="bump" data-id="${id}" data-field="jarsGiven" data-delta="-1">−</button>
             <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-field="jarsGiven" value="${e.jarsGiven}" />
@@ -318,7 +355,7 @@ function customerCard(date, id, complete) {
           </div>
         </div>
         <div class="counter">
-          <label>Khali jar uthe</label>
+          <label>${t("empty_picked")}</label>
           <div class="stepper">
             <button class="minus" data-act="bump" data-id="${id}" data-field="emptyCollected" data-delta="-1">−</button>
             <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-field="emptyCollected" value="${e.emptyCollected}" />
@@ -326,20 +363,20 @@ function customerCard(date, id, complete) {
           </div>
         </div>
       </div>
-      <p class="preview">Iske baad market mein baki: <b>${next}</b> jar</p>
-      <button class="done-btn" data-act="done" data-id="${id}">Delivery complete ✓</button>
+      <p class="preview">${t("after_market")}: <b>${next}</b> ${t("jar")}</p>
+      <button class="done-btn" data-act="done" data-id="${id}">${t("del_done")}</button>
     </article>
   `;
 }
 
 function rokdaHtml(date) {
-  const t = getTrip(date);
+  const trip = getTrip(date);
   return `
     <div class="extra-box extra-rokda" style="margin-top:8px">
-      <label>Rokda becha</label>
+      <label>${t("cash_sold")}</label>
       <div class="stepper mini">
         <button class="minus" data-act="trip-bump" data-field="rokdaJars" data-delta="-1">−</button>
-        <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="rokdaJars" value="${t.rokdaJars || 0}" />
+        <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="rokdaJars" value="${trip.rokdaJars || 0}" />
         <button class="plus" data-act="trip-bump" data-field="rokdaJars" data-delta="1">+</button>
       </div>
     </div>
@@ -348,30 +385,23 @@ function rokdaHtml(date) {
 
 function returnPanelHtml(date) {
   const x = returnExpect(date);
-  const mismatch = x.returned > 0 && x.returned !== x.totalShould;
-  const extraNote = x.extraShop > 0
-    ? `Shop se ${x.extraShop} extra khali uthe (pehle ka pending). Yeh jar gadi mein extra aaye — plant se leke gaye se zyada ho sakta hai.`
-    : x.extraShop < 0
-      ? `Shop pe ${Math.abs(x.extraShop)} khali pada / pending. Gadi ke total mein yeh nahi — wahan hi pade hain.`
-      : "";
+  const mismatch = Number(x.returned) > 0 && Number(x.returned) !== Number(x.totalShould);
   return `
     <div class="plant-box return-box">
-      <h3>Plant wapas</h3>
-      <p class="muted">Pani gira = wahi jar ab khali. Tuta = gadi mein nahi aayega. Shop wali khali alag hai.</p>
+      <h3>${t("plant_return")}</h3>
       <div class="return-calc">
-        <div class="return-row"><span>Plant se bhare gaye</span><b>${x.filledOut}</b></div>
-        <div class="return-row"><span>Route dale + rokda</span><b>${x.sold}</b></div>
-        <div class="return-row"><span>Tuta (wapas nahi)</span><b>− ${x.broke}</b></div>
-        <div class="return-row"><span>Pani gira (ab khali, jar hai)</span><b>${x.leak}</b></div>
-        <div class="return-row"><span>Shop se khali uthaye</span><b>${x.shopEmpty}</b></div>
-        <div class="return-row hi"><span>Bhare wapas</span><b>${x.filledShould}</b></div>
-        <div class="return-row hi"><span>Khali wapas (shop + pani gira)</span><b>${x.emptyShould}</b></div>
-        <div class="return-row tot"><span>Total gadi mein wapas</span><b>${x.totalShould}</b></div>
+        <div class="return-row"><span>${t("filled_from_plant")}</span><b>${x.filledOut}</b></div>
+        <div class="return-row"><span>${t("route_plus_cash")}</span><b>${x.sold}</b></div>
+        <div class="return-row"><span>${t("broken_gone")}</span><b>− ${x.broke}</b></div>
+        <div class="return-row"><span>${t("leak_now_empty")}</span><b>${x.leak}</b></div>
+        <div class="return-row"><span>${t("shop_empty")}</span><b>${x.shopEmpty}</b></div>
+        <div class="return-row hi"><span>${t("filled_back")}</span><b>${x.filledShould}</b></div>
+        <div class="return-row hi"><span>${t("empty_back")}</span><b>${x.emptyShould}</b></div>
+        <div class="return-row tot"><span>${t("total_vehicle")}</span><b>${x.totalShould}</b></div>
       </div>
-      ${extraNote ? `<p class="muted" style="margin-bottom:8px">${extraNote}</p>` : ""}
       <div class="work-extras">
         <div class="extra-box">
-          <label>Pani gira (ab khali)</label>
+          <label>${t("leak_empty")}</label>
           <div class="stepper mini">
             <button class="minus" data-act="trip-bump" data-field="leakJars" data-delta="-1">−</button>
             <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="leakJars" value="${getTrip(date).leakJars}" />
@@ -379,7 +409,7 @@ function returnPanelHtml(date) {
           </div>
         </div>
         <div class="extra-box">
-          <label>Jar toot gaya</label>
+          <label>${t("jar_broke")}</label>
           <div class="stepper mini">
             <button class="minus" data-act="trip-bump" data-field="brokeJars" data-delta="-1">−</button>
             <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="brokeJars" value="${getTrip(date).brokeJars}" />
@@ -388,15 +418,15 @@ function returnPanelHtml(date) {
         </div>
       </div>
       <div class="counter" style="margin-top:10px">
-        <label>Total jar wapas laye (aap gino)</label>
+        <label>${t("count_return")}</label>
         <div class="stepper">
           <button class="minus" data-act="trip-bump" data-field="returnedJars" data-delta="-1">−</button>
           <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="returnedJars" value="${x.returned}" />
           <button class="plus" data-act="trip-bump" data-field="returnedJars" data-delta="1">+</button>
         </div>
       </div>
-      ${mismatch ? `<p class="stock-warn">Aapne ${x.returned} likhe, system kehta hai ${x.totalShould} hone chahiye. Gino phir se.</p>` : ""}
-      ${x.returned > 0 && x.returned === x.totalShould ? `<p class="return-ok">Hisaab match — ${x.returned} jar wapas.</p>` : ""}
+      ${mismatch ? `<p class="stock-warn">${t("count_bad", { a: x.returned, b: x.totalShould })}</p>` : ""}
+      ${x.returned > 0 && x.returned === x.totalShould ? `<p class="return-ok">${t("count_ok", { n: x.returned })}</p>` : ""}
     </div>
   `;
 }
@@ -406,10 +436,10 @@ function dayFootHtml(date, stats) {
     <div class="foot-stats">
       ${dayStrip(date)}
       <div class="kpis">
-        <div class="kpi"><b>${stats.pending}</b><span>Baaki</span></div>
-        <div class="kpi"><b>${stats.done}</b><span>Complete</span></div>
-        <div class="kpi"><b>${stats.jars + (getTrip(date).rokdaJars || 0)}</b><span>Jar diye</span></div>
-        <div class="kpi"><b>${stats.empty}</b><span>Khali uthe</span></div>
+        <div class="kpi"><b>${stats.pending}</b><span>${t("remaining")}</span></div>
+        <div class="kpi"><b>${stats.done}</b><span>${t("complete")}</span></div>
+        <div class="kpi"><b>${stats.jars + (getTrip(date).rokdaJars || 0)}</b><span>${t("jars_out")}</span></div>
+        <div class="kpi"><b>${stats.empty}</b><span>${t("empty_short")}</span></div>
       </div>
     </div>
   `;
@@ -418,10 +448,10 @@ function dayFootHtml(date, stats) {
 function plantBoxHtml(date, stock) {
   return `
       <div class="plant-box">
-        <h3>Gadi mein bhare jar</h3>
+        <h3>${t("vehicle_filled")}</h3>
         <div class="stock-row">
           <div class="counter">
-            <label>Bhare leke gaye</label>
+            <label>${t("took_filled")}</label>
             <div class="stepper">
               <button class="minus" data-act="trip-bump" data-field="filledOut" data-delta="-1">−</button>
               <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="filledOut" value="${getTrip(date).filledOut}" />
@@ -430,18 +460,18 @@ function plantBoxHtml(date, stock) {
           </div>
           <div class="stock-read ${stock.remaining < 0 ? "stock-bad" : ""}">
             <div class="stock-pair">
-              <span>Bik gaye</span>
+              <span>${t("sold")}</span>
               <b>${stock.sold}</b>
             </div>
             <div class="stock-pair">
-              <span>Ab gadi mein bhare</span>
+              <span>${t("now_vehicle")}</span>
               <b>${stock.remaining}</b>
             </div>
-            ${stock.leakEmpty ? `<div class="stock-pair"><span>Pani gira = khali</span><b>${stock.leakEmpty}</b></div>` : ""}
+            ${stock.leakEmpty ? `<div class="stock-pair"><span>${t("leak_eq")}</span><b>${stock.leakEmpty}</b></div>` : ""}
           </div>
         </div>
         ${rokdaHtml(date)}
-        ${stock.remaining < 0 ? `<p class="stock-warn">Bik gaye + pani/toot plant se leke gaye se zyada. Number check karo.</p>` : ""}
+        ${stock.remaining < 0 ? `<p class="stock-warn">${t("stock_over")}</p>` : ""}
       </div>
   `;
 }
@@ -456,40 +486,40 @@ function dayCloseHtml(date, pending, stats, stock) {
     <section class="done-hero">
       <div class="done-check">✓</div>
       <div>
-        <h2>Sab complete</h2>
-        <p>Route complete. Neeche plant wapas hisaab bharo.</p>
+        <h2>${t("all_done")}</h2>
+        <p>${t("route_done_hint")}</p>
       </div>
     </section>
     <section class="close-box">
-      <h3>Aaj ka hisaab</h3>
+      <h3>${t("today_hisab")}</h3>
       <div class="close-grid close-grid-3">
         <div class="close-tile">
           <b>${trip.filledOut}</b>
-          <span>Bhar ke gaye</span>
+          <span>${t("took_short")}</span>
         </div>
         <div class="close-tile">
           <b>${stats.empty + loss.leak}</b>
-          <span>Khali (uthaye + pani gira)</span>
+          <span>${t("empty_plus_leak")}</span>
         </div>
         <div class="close-tile">
           <b>${stock.delivered}</b>
-          <span>Route dale</span>
+          <span>${t("route_gave")}</span>
         </div>
         <div class="close-tile">
           <b>${rokda}</b>
-          <span>Rokda becha</span>
+          <span>${t("cash_sold")}</span>
         </div>
         <div class="close-tile">
           <b>${stock.sold}</b>
-          <span>Total bika</span>
+          <span>${t("total_sold")}</span>
         </div>
         <div class="close-tile">
           <b>${trip.filledBack}</b>
-          <span>Bhare wapas</span>
+          <span>${t("filled_back")}</span>
         </div>
         <div class="close-tile">
           <b>${loss.broke}</b>
-          <span>Jar toot</span>
+          <span>${t("jar_broke_s")}</span>
         </div>
       </div>
     </section>
@@ -504,37 +534,37 @@ function renderHome(dateUse) {
   const stats = dayStats(date);
   const stock = vehicleStock(date);
   const isPast = date !== businessDate();
-  const titles = { 0: "aaj ka route", 1: "kal ka route", 2: "2 din pehle", 3: "3 din pehle" };
+  const titles = { 0: t("today_route"), 1: t("yesterday_route"), 2: t("days_ago_2"), 3: t("days_ago_3") };
   const idx = lastWorkDates(4).indexOf(date);
   const when = titles[idx] || displayDate(date);
   const allDone = pending.length === 0 && stats.total > 0;
   app.innerHTML = `
-    ${header({ subtitle: (me?.name || "Driver") + " · " + when, date, showTimer: !isPast })}
+    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + when, date, showTimer: !isPast })}
     <main class="wrap">
-      ${isPast ? `<div class="banner">Yeh ${when} wala page hai — aaj jaisa hi. Galat number ho to yahin theek karo.</div>` : ""}
+      ${isPast ? `<div class="banner">${t("past_page", { when })}</div>` : ""}
       ${allDone ? dayCloseHtml(date, pending, stats, stock) : plantBoxHtml(date, stock)}
-      ${allDone ? "" : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>Is route ke pending jar (market)</span></div>`}
+      ${allDone ? "" : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>`}
       ${allDone ? "" : `
       <div class="section-h">
-        <h2>Baaki customers</h2>
+        <h2>${t("left_cust")}</h2>
         <div style="display:flex;gap:8px;align-items:center">
           <span class="count">${pending.length}</span>
-          <a class="seq-link" href="#/sequence/${date}">Sequence</a>
+          <a class="seq-link" href="#/sequence/${date}">${t("sequence")}</a>
         </div>
       </div>
       ${pending.length
         ? pending.map((id) => customerCard(date, id, false)).join("")
-        : `<div class="empty">Abhi koi customer nahi. Neeche + Naya se naam add karo.</div>`}
+        : `<div class="empty">${t("no_cust_add")}</div>`}
       `}
       <div class="section-h" style="margin-top:18px">
-        <h2>Delivery complete</h2>
+        <h2>${t("complete")}</h2>
         <span class="count">${done.length}</span>
       </div>
-      ${done.length ? done.map((id) => customerCard(date, id, true)).join("") : `<div class="empty">Complete ke baad yahan aayega.</div>`}
+      ${done.length ? done.map((id) => customerCard(date, id, true)).join("") : `<div class="empty">${t("after_done")}</div>`}
       ${returnPanelHtml(date)}
       ${dayFootHtml(date, stats)}
     </main>
-    <button class="fab" data-act="add-open">+ Naya customer</button>
+    <button class="fab" data-act="add-open">${t("new_cust")}</button>
     ${bottomNav("home")}
   `;
   app.dataset.date = date;
@@ -546,11 +576,10 @@ function renderSequence(date) {
   const day = getDay(dateUse);
   const me = getDriver();
   app.innerHTML = `
-    ${header({ subtitle: (me?.name || "Driver") + " · sequence", date: dateUse, showTimer: false })}
+    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + t("sequence"), date: dateUse, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="${dayHref(dateUse)}">← Route par wapas</a>
-      <div class="section-h"><h2>Delivery sequence</h2><span class="count">${ids.length}</span></div>
-      <p class="muted seq-help">Sirf naam. ▲ ▼ ya drag se pehle/baad set karo — Supabase par save hoga.</p>
+      <a class="back-link" href="${dayHref(dateUse)}">${t("back_route")}</a>
+      <div class="section-h"><h2>${t("seq_title")}</h2><span class="count">${ids.length}</span></div>
       ${ids.length ? `
         <div class="seq-wrap" id="seq-body">
           ${ids.map((id, i) => {
@@ -561,7 +590,7 @@ function renderSequence(date) {
               <div class="seq-row${done ? " seq-done" : ""}" data-seq-id="${id}" draggable="true">
                 <span class="seq-num">${i + 1}</span>
                 <span class="seq-name-row">
-                  <span class="seq-name">${c.name}${done ? " <em>complete</em>" : ""}</span>
+                  <span class="seq-name">${c.name}${done ? ` <em>${t("complete")}</em>` : ""}</span>
                   ${speakBtn(id)}
                 </span>
                 <div class="seq-arrows">
@@ -572,7 +601,7 @@ function renderSequence(date) {
             `;
           }).join("")}
         </div>
-      ` : `<div class="empty">Pehle customer add karo.</div>`}
+      ` : `<div class="empty">${t("add_first")}</div>`}
     </main>
     ${bottomNav("home")}
   `;
@@ -583,9 +612,9 @@ function renderSequence(date) {
 function renderCustomers() {
   const { customers } = getState();
   app.innerHTML = `
-    ${header({ subtitle: "Mere customers", showTimer: false })}
+    ${header({ subtitle: t("my_cust"), showTimer: false })}
     <main class="wrap">
-      <p class="muted" style="margin-bottom:10px">${customers.length} customers · pending = market mein baki jar</p>
+      <p class="muted" style="margin-bottom:10px">${t("cust_n", { n: customers.length })}</p>
       ${customers.length ? customers.map((c) => `
         <div class="list-item">
           <div style="flex:1;min-width:0">
@@ -593,13 +622,13 @@ function renderCustomers() {
               <strong>${c.name}</strong>
               ${speakBtn(c.id)}
             </div>
-            <div class="muted">${c.place ? c.place + " · " : ""}pending ${c.pendingJars}</div>
+            <div class="muted">${c.place ? c.place + " · " : ""}${t("pending_word")} ${c.pendingJars}</div>
           </div>
-          <button class="ghost" style="padding:8px 10px;border-radius:10px;border:0;font-weight:800" data-act="edit-cust" data-id="${c.id}">Edit</button>
+          <button class="ghost" style="padding:8px 10px;border-radius:10px;border:0;font-weight:800" data-act="edit-cust" data-id="${c.id}">${t("edit")}</button>
         </div>
-      `).join("") : `<div class="empty">List khali hai. Apne route ke naam add karo.</div>`}
+      `).join("") : `<div class="empty">${t("empty_list")}</div>`}
     </main>
-    <button class="fab" data-act="add-open">+ Naya customer</button>
+    <button class="fab" data-act="add-open">${t("new_cust")}</button>
     ${bottomNav("customers")}
   `;
 }
@@ -613,17 +642,17 @@ function ownerPeriodTabs(base, range) {
   const today = businessDate();
   const monthVal = range.month || today.slice(0, 7);
   const items = [
-    ["today", "Aaj"],
-    ["month", "Mahina"],
-    ["year", "Saal"],
-    ["all", "Sab"],
+    ["today", t("today")],
+    ["month", t("month")],
+    ["year", t("year")],
+    ["all", t("all")],
   ];
   return `
     <div class="day-tabs">
       ${items.map(([p, label]) => `<a href="${base}/${p}" class="${range.period === p ? "on" : ""}"><strong>${label}</strong></a>`).join("")}
     </div>
     <div class="field" style="margin-bottom:12px">
-      <label>Koi mahina chuno (bill / history)</label>
+      <label>${t("pick_month")}</label>
       <input type="month" value="${monthVal}" data-act="owner-month" data-base="${base}" />
     </div>
   `;
@@ -634,38 +663,37 @@ function renderOwner(range) {
   const path = periodPath(range);
   const gineBad = s.returnMismatch || ((s.counted || 0) > 0 && s.counted !== s.expectTotal);
   app.innerHTML = `
-    ${header({ subtitle: "Plant dashboard · " + range.label, date: range.to, showTimer: false })}
+    ${header({ subtitle: t("plant_dash") + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap">
       ${ownerPeriodTabs("#/owner", range)}
       <div class="kpis kpis-3">
-        <div class="kpi"><b>${s.filledOut}</b><span>Bhar ke gaye</span></div>
-        <div class="kpi"><b>${s.jarsToCustomers + (s.rokda || 0)}</b><span>Total bika</span></div>
-        <div class="kpi"><b>${s.remaining}</b><span>Bache hisaab</span></div>
+        <div class="kpi"><b>${s.filledOut}</b><span>${t("filled_from_plant")}</span></div>
+        <div class="kpi"><b>${s.jarsToCustomers + (s.rokda || 0)}</b><span>${t("sold")}</span></div>
+        <div class="kpi"><b>${s.remaining}</b><span>${t("on_vehicle")}</span></div>
       </div>
       <div class="kpis kpis-3">
-        <div class="kpi"><b>${s.rokda || 0}</b><span>Rokda</span></div>
-        <div class="kpi"><b>${s.filledBack}</b><span>Bhare wapas</span></div>
-        <div class="kpi"><b>${s.empty}</b><span>Khali aaye</span></div>
+        <div class="kpi"><b>${s.rokda || 0}</b><span>${t("cash_sold")}</span></div>
+        <div class="kpi"><b>${s.filledBack}</b><span>${t("filled_in")}</span></div>
+        <div class="kpi"><b>${s.empty}</b><span>${t("shop_empty_in")}</span></div>
       </div>
       <div class="kpis kpis-3">
         <a class="kpi ${s.leak ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/cap/${path}" data-act="hash" data-go="#/owner/loss/cap/${path}">
-          <b>${s.leak || 0}</b><span>Cap / pani gira</span><em>kis driver · dabao</em>
+          <b>${s.leak || 0}</b><span>${t("cap_leak")}</span>
         </a>
         <a class="kpi ${s.broke ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/toot/${path}" data-act="hash" data-go="#/owner/loss/toot/${path}">
-          <b>${s.broke || 0}</b><span>Toot</span><em>kis driver · dabao</em>
+          <b>${s.broke || 0}</b><span>${t("jars_broke")}</span>
         </a>
         <a class="kpi ${gineBad ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/${path}">
-          <b>${s.counted || 0}<small> / ${s.expectTotal || 0}</small></b><span>Gine / chahiye</span>
+          <b>${s.counted || 0}<small> / ${s.expectTotal || 0}</small></b><span>${t("counted_need")}</span>
         </a>
       </div>
-      ${gineBad ? `<p class="stock-warn" style="margin-bottom:12px">Driver ne ${s.counted} gine, system kehta hai ${s.expectTotal} wapas hone chahiye.</p>` : ""}
+      ${gineBad ? `<p class="stock-warn" style="margin-bottom:12px">${t("dm_count_warn", { a: s.counted, b: s.expectTotal })}</p>` : ""}
       <a class="kpi accent-kpi" href="#/owner/pending/${path}" style="display:block">
-        <b>${s.pendingMarket}</b><span>Jar pending in market · list ke liye dabao</span>
+        <b>${s.pendingMarket}</b><span>${t("at_shops")}</span>
       </a>
-      <p class="muted" style="margin:-6px 0 14px">Agle din khali uthane par yeh number kam hoga. Paisa udhari alag hai.</p>
       <div class="section-h">
-        <h2>Jar Supply — naam dabao</h2>
-        <button type="button" class="ghost rate-btn" data-act="add-driver">+ Add</button>
+        <h2>${t("delivery_man")}</h2>
+        <button type="button" class="ghost rate-btn" data-act="add-driver">${t("add")}</button>
       </div>
       ${s.byDriver.length ? s.byDriver.map((d) => {
         const full = (getState().owner.drivers || []).find((x) => x.id === d.id);
@@ -676,25 +704,24 @@ function renderOwner(range) {
             <div class="avatar" style="background:#0e7490">${(d.name || "?").slice(0, 1)}</div>
             <div style="flex:1">
               <h3>${d.name}</h3>
-              <p>Leke ${d.filledOut} · dale ${d.jars} · cap ${d.leak || 0} · toot ${d.broke || 0}</p>
-              <p>Market mein atke ${d.pending || 0} jar · gine ${d.counted || 0} / ${d.expectTotal || 0}${d.returnMismatch ? " · match nahi" : ""}</p>
+              <p>${t("took")} ${d.filledOut} · ${t("gave_s")} ${d.jars} · ${t("cap_s")} ${d.leak || 0} · ${t("broke_s")} ${d.broke || 0}</p>
+              <p>${t("stuck_m")} ${d.pending || 0} ${t("jar")} · ${t("counted_s")} ${d.counted || 0} / ${d.expectTotal || 0}${d.returnMismatch ? " · " + t("no_match") : ""}</p>
             </div>
-            <span class="go">Table</span>
+            <span class="go">${t("table")}</span>
           </a>
-          <p class="driver-key-line">Key: <b>${key || "abhi nahi"}</b>
-            ${key ? `<button type="button" class="ghost rate-btn" data-act="copy-key" data-key="${key}">Copy</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">Key banao</button>`}
+          <p class="driver-key-line">${t("key")}: <b>${key || t("not_yet")}</b>
+            ${key ? `<button type="button" class="ghost rate-btn" data-act="copy-key" data-key="${key}">${t("copy")}</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">${t("make_key")}</button>`}
           </p>
         </div>
       `;
-      }).join("") : `<div class="empty">Jar Supply add karo. Unhe company username + key do.</div>`}
+      }).join("") : `<div class="empty">${t("add_dm")}</div>`}
       <div class="section-h owner-cust-head">
         <h2>Customers</h2>
-        <input class="cust-search" data-act="cust-search" type="search" placeholder="Naam / place dhoondo" value="${ownerCustQuery.replace(/"/g, "&quot;")}" autocomplete="off" />
+        <input class="cust-search" data-act="cust-search" type="search" placeholder="${t("search_cust")}" value="${ownerCustQuery.replace(/"/g, "&quot;")}" autocomplete="off" />
       </div>
       <div id="owner-cust-list">${stateCustomersList(path, range)}</div>
       <a class="bs-cta" href="#/owner/sheet/${path}">
-        <strong>Balance Sheet</strong>
-        <small>Paisa hisaab · jar statement · dekho, pasand aaye to rakhenge</small>
+        <strong>${t("balance_sheet")}</strong>
       </a>
     </main>
     ${ownerNav(range)}
@@ -716,20 +743,20 @@ function udhariCustRow(path, c) {
       <div>
         <strong>${c.name}</strong>
         ${c.place ? `<div class="muted">${c.place}</div>` : ""}
-        ${amt ? `<div class="muted">Approx ₹ ${rupee(amt)}</div>` : ""}
+        ${amt ? `<div class="muted">${t("approx")} ₹ ${rupee(amt)}</div>` : ""}
       </div>
-      <div class="pending-box hot" style="margin:0"><b>${c.pendingJars}</b><span>baki jar</span></div>
+      <div class="pending-box hot" style="margin:0"><b>${c.pendingJars}</b><span>${t("left_jars")}</span></div>
     </a>
   `;
 }
 
 function udhariByDriverHtml(path, groups, opts = {}) {
-  if (!groups.length) return `<div class="empty">Kisi ke paas pending jar nahi.</div>`;
+  if (!groups.length) return `<div class="empty">${t("no_pending_j")}</div>`;
   const preview = opts.preview;
   return groups.map((g) => {
     const list = preview ? g.customers.slice(0, 4) : g.customers;
     const extra = preview && g.customers.length > list.length
-      ? `<a class="muted" href="#/owner/pending/${path}" style="display:block;padding:4px 4px 10px">+${g.customers.length - list.length} aur is driver ke</a>`
+      ? `<a class="muted" href="#/owner/pending/${path}" style="display:block;padding:4px 4px 10px">${t("more_dm", { n: g.customers.length - list.length })}</a>`
       : "";
     return `
       <section class="udhari-group">
@@ -737,9 +764,9 @@ function udhariByDriverHtml(path, groups, opts = {}) {
           <div class="avatar" style="background:#0e7490">${(g.name || "?").slice(0, 1)}</div>
           <div style="flex:1">
             <h3>${g.name}</h3>
-            <p>${g.customers.length} customer · inke route pe atke</p>
+            <p>${t("on_route", { n: g.customers.length })}</p>
           </div>
-          <div class="pending-box hot" style="margin:0"><b>${g.total}</b><span>atke jar</span></div>
+          <div class="pending-box hot" style="margin:0"><b>${g.total}</b><span>${t("stuck_jars")}</span></div>
         </div>
         ${list.map((c) => udhariCustRow(path, c)).join("")}
         ${extra}
@@ -752,12 +779,11 @@ function renderOwnerUdhari(range) {
   const s = ownerPeriodStats();
   const path = periodPath(range);
   app.innerHTML = `
-    ${header({ subtitle: "Jar pending in market · " + range.label, date: range.to, showTimer: false })}
+    ${header({ subtitle: t("market_title") + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="#/owner/${path}">← Dashboard</a>
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
       ${ownerPeriodTabs("#/owner/pending", range)}
-      <div class="kpi accent-kpi"><b>${s.pendingMarket}</b><span>Jar pending in market — sab drivers</span></div>
-      <p class="muted" style="margin-bottom:10px">Yeh abhi market mein pade khali jar hain. Driver kal uthaye to yahan se minus. Customer ka naam dabao. Udhari (paisa) alag cheez hai.</p>
+      <div class="kpi accent-kpi"><b>${s.pendingMarket}</b><span>${t("at_shops")}</span></div>
       ${udhariByDriverHtml(path, s.owedByDriver || [])}
     </main>
     ${ownerNav(range, "pending")}
@@ -772,25 +798,19 @@ function renderOwnerLoss(range, kind) {
     .filter((g) => (focus === "cap" ? g.leak > 0 : focus === "toot" ? g.broke > 0 : true))
     .sort((a, b) => (focus === "cap" ? b.leak - a.leak : focus === "toot" ? b.broke - a.broke : (b.leak + b.broke) - (a.leak + a.broke)));
   const lossBase = focus === "all" ? "#/owner/loss" : `#/owner/loss/${focus}`;
-  const title = focus === "cap" ? "Cap / pani gira" : focus === "toot" ? "Jar toot" : "Cap + toot";
+  const title = focus === "cap" ? t("cap_title") : focus === "toot" ? t("broke_title") : t("both_loss");
   const total = focus === "cap" ? (s.leak || 0) : focus === "toot" ? (s.broke || 0) : (s.leak || 0) + (s.broke || 0);
-  const hint = focus === "cap"
-    ? "Pani gira = jar gadi mein hi hai, ab khali. Kis driver ke kitne."
-    : focus === "toot"
-      ? "Toot = jar wapas nahi aaya. Kis driver ke kitne."
-      : "Cap aur toot dono — kis driver ke, kis din.";
   app.innerHTML = `
     ${header({ subtitle: title + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="#/owner/${path}">← Dashboard</a>
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
       ${ownerPeriodTabs(lossBase, range)}
       <div class="day-tabs" style="margin-top:0">
-        <a href="#/owner/loss/${path}" class="${focus === "all" ? "on" : ""}"><strong>Dono</strong></a>
-        <a href="#/owner/loss/cap/${path}" class="${focus === "cap" ? "on" : ""}"><strong>Cap / gira</strong></a>
-        <a href="#/owner/loss/toot/${path}" class="${focus === "toot" ? "on" : ""}"><strong>Toot</strong></a>
+        <a href="#/owner/loss/${path}" class="${focus === "all" ? "on" : ""}"><strong>${t("both")}</strong></a>
+        <a href="#/owner/loss/cap/${path}" class="${focus === "cap" ? "on" : ""}"><strong>${t("cap_tab")}</strong></a>
+        <a href="#/owner/loss/toot/${path}" class="${focus === "toot" ? "on" : ""}"><strong>${t("broke_tab")}</strong></a>
       </div>
-      <div class="kpi accent-kpi ${total ? "kpi-warn" : ""}" style="display:block"><b>${total}</b><span>${title} — sab drivers</span></div>
-      <p class="muted" style="margin-bottom:10px">${hint}</p>
+      <div class="kpi accent-kpi ${total ? "kpi-warn" : ""}" style="display:block"><b>${total}</b><span>${title}</span></div>
       ${shownLossHtml(path, groups, focus)}
     </main>
     ${ownerNav(range)}
@@ -799,7 +819,7 @@ function renderOwnerLoss(range, kind) {
 
 function shownLossHtml(path, groups, focus) {
   if (!groups.length) {
-    return `<div class="empty">Is period mein ${focus === "toot" ? "koi toot" : focus === "cap" ? "koi pani gira" : "cap/toot"} nahi.</div>`;
+    return `<div class="empty">${t("no_loss", { x: focus === "toot" ? t("no_broke") : focus === "cap" ? t("no_cap") : t("no_both") })}</div>`;
   }
   return groups.map((g) => {
     const days = g.days.filter((p) => (focus === "cap" ? p.leak > 0 : focus === "toot" ? p.broke > 0 : true));
@@ -809,22 +829,22 @@ function shownLossHtml(path, groups, focus) {
           <div class="avatar" style="background:#0e7490">${(g.name || "?").slice(0, 1)}</div>
           <div style="flex:1">
             <h3>${g.name}</h3>
-            <p>${focus === "cap" ? `Pani gira ${g.leak}` : focus === "toot" ? `Toot ${g.broke}` : `Cap ${g.leak} · toot ${g.broke}`}</p>
+            <p>${focus === "cap" ? t("leak_n", { n: g.leak }) : focus === "toot" ? t("broke_n", { n: g.broke }) : t("cap_broke_n", { a: g.leak, b: g.broke })}</p>
           </div>
           <div class="pending-box hot" style="margin:0">
             <b>${focus === "cap" ? g.leak : focus === "toot" ? g.broke : g.leak + g.broke}</b>
-            <span>${focus === "toot" ? "toot" : focus === "cap" ? "gira" : "total"}</span>
+            <span>${focus === "toot" ? t("broke_s") : focus === "cap" ? t("leak_s") : t("total_s")}</span>
           </div>
         </a>
         ${days.map((p) => `
           <div class="list-item owner-cust udhari-cust">
             <div>
               <strong>${billDate(p.date)}</strong>
-              <div class="muted">${p.filledOut} bhar ke gaye · ${p.jars} dale</div>
+              <div class="muted">${t("took_gave", { a: p.filledOut, b: p.jars })}</div>
             </div>
             <div class="muted" style="text-align:right;font-weight:800">
-              ${focus !== "toot" ? `<div>Cap ${p.leak || 0}</div>` : ""}
-              ${focus !== "cap" ? `<div>Toot ${p.broke || 0}</div>` : ""}
+              ${focus !== "toot" ? `<div>${t("cap_col")} ${p.leak || 0}</div>` : ""}
+              ${focus !== "cap" ? `<div>${t("broke_col")} ${p.broke || 0}</div>` : ""}
             </div>
           </div>
         `).join("")}
@@ -834,15 +854,15 @@ function shownLossHtml(path, groups, focus) {
 }
 
 function periodJarLabel(range) {
-  if (range.period === "today") return "Aaj dale";
-  if (range.period === "month" || range.period === "m") return "Mahine ke jar";
-  if (range.period === "year") return "Saal ke jar";
-  return "Kul jar";
+  if (range.period === "today") return t("today_gave");
+  if (range.period === "month" || range.period === "m") return t("month_jars");
+  if (range.period === "year") return t("year_jars");
+  return t("total_jars");
 }
 
 function stateCustomersList(path, range, q = ownerCustQuery) {
   const { customers, drivers } = getState().owner;
-  if (!customers.length) return `<div class="empty">Abhi koi customer nahi.</div>`;
+  if (!customers.length) return `<div class="empty">${t("no_cust")}</div>`;
   const jarWord = periodJarLabel(range);
   const needle = String(q || "").trim().toLowerCase();
   const filtered = needle
@@ -851,7 +871,7 @@ function stateCustomersList(path, range, q = ownerCustQuery) {
         return [c.name, c.place, d?.name].some((v) => String(v || "").toLowerCase().includes(needle));
       })
     : customers;
-  if (!filtered.length) return `<div class="empty">Koi customer nahi mila.</div>`;
+  if (!filtered.length) return `<div class="empty">${t("no_cust_hit")}</div>`;
   return filtered.map((c) => {
     const d = drivers.find((x) => x.id === c.device_id);
     const rate = Number(c.jarRate) || 0;
@@ -860,21 +880,21 @@ function stateCustomersList(path, range, q = ownerCustQuery) {
     const due = money.due;
     const dueHot = due > 0;
     const dueText = due < 0 ? `₹ ${rupee(Math.abs(due))}` : `₹ ${rupee(Math.max(0, due))}`;
-    const dueLabel = due < 0 ? "advance" : "pending paise";
+    const dueLabel = due < 0 ? t("advance") : t("pending_rs");
     return `
       <div class="list-item owner-cust">
         <a href="#/owner/bill/${c.id}/${path}">
           <strong>${c.name}</strong>
           ${c.place ? `<div class="muted">${c.place}</div>` : ""}
-          <div class="muted">${jars} jar · ${jarWord} · ${d?.name || "Driver"}</div>
-          <div class="muted">${rate ? `₹ ${rupee(rate)} / jar` : "Rate set nahi — pehle Rate dabao"}</div>
+          <div class="muted">${jars} jar · ${jarWord} · ${d?.name || t("delivery_man")}</div>
+          <div class="muted">${rate ? `₹ ${rupee(rate)} ${t("per_jar")}` : t("rate_none")}</div>
         </a>
         <div class="owner-cust-side">
           <a class="money-chip ${dueHot ? "hot" : ""}" href="#/owner/bill/${c.id}/${path}">
             <b>${dueText}</b>
             <span>${dueLabel}</span>
           </a>
-          <button type="button" class="ghost rate-btn" data-act="edit-cust" data-id="${c.id}">Rate</button>
+          <button type="button" class="ghost rate-btn" data-act="edit-cust" data-id="${c.id}">${t("rate")}</button>
         </div>
       </div>
     `;
@@ -885,47 +905,47 @@ function renderOwnerDriver(driverId, range) {
   const d = ownerDriverDetail(driverId);
   const path = periodPath(range);
   if (!d.driver) {
-    app.innerHTML = `${header({ subtitle: "Driver nahi mila", showTimer: false })}<main class="wrap"><a class="back-link" href="#/owner/${path}">← Dashboard</a></main>`;
+    app.innerHTML = `${header({ subtitle: t("dm_miss"), showTimer: false })}<main class="wrap"><a class="back-link" href="#/owner/${path}">${t("back_dash")}</a></main>`;
     return;
   }
   app.innerHTML = `
     ${header({ subtitle: d.driver.name + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap ${isMonthRegister(range) ? "wrap-wide" : ""}">
-      <a class="back-link" href="#/owner/${path}">← Dashboard</a>
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
       ${ownerPeriodTabs(`#/owner/driver/${driverId}`, range)}
       <div class="kpis kpis-3">
-        <div class="kpi"><b>${d.filledOut}</b><span>Bhar ke le gaya</span></div>
-        <div class="kpi"><b>${d.jars}</b><span>Dale</span></div>
-        <div class="kpi"><b>${d.filledOut - d.jars - (d.rokda || 0) - d.waste}</b><span>Bache hisaab</span></div>
+        <div class="kpi"><b>${d.filledOut}</b><span>${t("filled_from_plant")}</span></div>
+        <div class="kpi"><b>${d.jars}</b><span>${t("shop_gave")}</span></div>
+        <div class="kpi"><b>${d.filledOut - d.jars - (d.rokda || 0) - d.waste}</b><span>${t("on_vehicle")}</span></div>
       </div>
       <div class="kpis kpis-3">
-        <div class="kpi"><b>${d.rokda || 0}</b><span>Rokda</span></div>
-        <div class="kpi"><b>${d.filledBack}</b><span>Bhare wapas</span></div>
-        <div class="kpi"><b>${d.empty}</b><span>Khali laye</span></div>
+        <div class="kpi"><b>${d.rokda || 0}</b><span>${t("cash_sold")}</span></div>
+        <div class="kpi"><b>${d.filledBack}</b><span>${t("filled_in")}</span></div>
+        <div class="kpi"><b>${d.empty}</b><span>${t("shop_empty_in")}</span></div>
       </div>
       <div class="kpis kpis-3">
         <a class="kpi ${d.leak ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/cap/${path}" data-act="hash" data-go="#/owner/loss/cap/${path}">
-          <b>${d.leak || 0}</b><span>Cap / pani gira</span><em>kis driver · dabao</em>
+          <b>${d.leak || 0}</b><span>${t("cap_leak")}</span>
         </a>
         <a class="kpi ${d.broke ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/toot/${path}" data-act="hash" data-go="#/owner/loss/toot/${path}">
-          <b>${d.broke || 0}</b><span>Toot</span><em>kis driver · dabao</em>
+          <b>${d.broke || 0}</b><span>${t("jars_broke")}</span>
         </a>
-        <div class="kpi ${d.returnMismatch ? "kpi-warn" : ""}"><b>${d.counted || 0}<small> / ${d.expectTotal || 0}</small></b><span>Gine / chahiye</span></div>
+        <div class="kpi ${d.returnMismatch ? "kpi-warn" : ""}"><b>${d.counted || 0}<small> / ${d.expectTotal || 0}</small></b><span>${t("counted_need")}</span></div>
       </div>
-      ${d.returnMismatch ? `<p class="stock-warn" style="margin-bottom:12px">Is driver ne ${d.counted} gine, system ${d.expectTotal} kehta hai.</p>` : ""}
+      ${d.returnMismatch ? `<p class="stock-warn" style="margin-bottom:12px">${t("this_dm_count", { a: d.counted, b: d.expectTotal })}</p>` : ""}
       <div class="ow-scroll">
         <table class="ow-table">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Leke</th>
-              <th>Dale</th>
-              <th>Cap</th>
-              <th>Toot</th>
-              <th>Rokda</th>
-              <th>Wapas</th>
-              <th>Gine</th>
-              <th>Chahiye</th>
+              <th>${t("date")}</th>
+              <th>${t("took_col")}</th>
+              <th>${t("gave_col")}</th>
+              <th>${t("cap_col")}</th>
+              <th>${t("broke_col")}</th>
+              <th>${t("cash_col")}</th>
+              <th>${t("back_col")}</th>
+              <th>${t("count_col")}</th>
+              <th>${t("need_col")}</th>
             </tr>
           </thead>
           <tbody>
@@ -941,7 +961,7 @@ function renderOwnerDriver(driverId, range) {
                 <td class="${p.mismatch ? "cell-bad" : ""}">${p.counted || 0}</td>
                 <td>${p.expectTotal || 0}</td>
               </tr>
-            `).join("") : `<tr><td colspan="9">Is period mein plant trip nahi.</td></tr>`}
+            `).join("") : `<tr><td colspan="9">${t("no_trip")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -960,12 +980,12 @@ function regCell(cell, date, today) {
 function driverRegisterHtml(driverId, range, path) {
   const g = ownerDriverRegister(driverId, range);
   if (!g.rows.length) {
-    return `<div class="empty">Is mahine is driver ke customers nahi, ya delivery nahi.</div>`;
+    return `<div class="empty">${t("no_dm_month")}</div>`;
   }
   return `
     <div class="reg-legend">
-      <strong>${g.label} register</strong>
-      <span>Upar = kitne jar dale · Neeche = kitne khali uthaye · Side mein 1 se ${g.last} tarikh</span>
+      <strong>${g.label} ${t("register")}</strong>
+      <span>${t("reg_help", { n: g.last })}</span>
     </div>
     <div class="reg-scroll">
       <table class="reg-table">
@@ -973,8 +993,8 @@ function driverRegisterHtml(driverId, range, path) {
           <tr>
             <th class="reg-name">${g.label}</th>
             ${g.days.map((date, i) => `<th class="reg-day${date === g.today ? " is-today" : ""}">${i + 1}</th>`).join("")}
-            <th class="reg-tot">Total jar</th>
-            <th class="reg-tot khali">Total khali</th>
+            <th class="reg-tot">${t("tot_jar")}</th>
+            <th class="reg-tot khali">${t("tot_empty")}</th>
           </tr>
         </thead>
         <tbody>
@@ -992,7 +1012,7 @@ function driverRegisterHtml(driverId, range, path) {
         </tbody>
         <tfoot>
           <tr>
-            <th class="reg-name">Kul</th>
+            <th class="reg-name">${t("total")}</th>
             ${g.foot.map((x, i) => {
               if (!x.jars && !x.empty) return `<td class="reg-day${g.days[i] === g.today ? " is-today" : ""}"></td>`;
               return `<td class="reg-day has${g.days[i] === g.today ? " is-today" : ""}"><span class="reg-frac"><b>${x.jars || 0}</b><em>${x.empty || 0}</em></span></td>`;
@@ -1012,11 +1032,11 @@ function driverLogHtml(d, path) {
         <table class="ow-table">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Time</th>
-              <th>Customer</th>
-              <th>Dale</th>
-              <th>Khali</th>
+              <th>${t("date")}</th>
+              <th>${t("time")}</th>
+              <th>${t("customer")}</th>
+              <th>${t("gave_col")}</th>
+              <th>${t("empty_col")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1028,7 +1048,7 @@ function driverLogHtml(d, path) {
                 <td>${r.jars_given}</td>
                 <td>${r.empty_collected}</td>
               </tr>
-            `).join("") : `<tr><td colspan="5">Is period mein koi complete delivery nahi.</td></tr>`}
+            `).join("") : `<tr><td colspan="5">${t("no_done_del")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1040,13 +1060,13 @@ function renderOwnerSheet(range) {
   const path = periodPath(range);
   const j = bs.jars;
   app.innerHTML = `
-    ${header({ subtitle: "Balance Sheet · " + range.label, date: range.to, showTimer: false })}
+    ${header({ subtitle: t("balance_sheet") + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="#/owner/${path}">← Dashboard</a>
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
       ${ownerPeriodTabs("#/owner/sheet", range)}
       <div class="row-btns no-print" style="margin-bottom:12px">
-        <button type="button" class="primary" data-act="bill-print">Print</button>
-        <button type="button" class="ghost" data-act="sheet-save">Save image</button>
+        <button type="button" class="primary" data-act="bill-print">${t("print")}</button>
+        <button type="button" class="ghost" data-act="sheet-save">${t("save_img")}</button>
       </div>
       <section class="bs-sheet" id="bs-sheet">
         <div class="bs-mark" aria-hidden="true">SA</div>
@@ -1063,57 +1083,56 @@ function renderOwnerSheet(range) {
             <div class="bs-sub">As on ${billDate(bs.asOn)} · ${range.label}</div>
           </div>
           <div class="bs-hero">
-            <span>Net udhari</span>
+            <span>${t("net_udhari")}</span>
             <b>₹ ${rupee(bs.equity)}</b>
           </div>
         </div>
         <div class="bs-meter">
           <div class="bs-meter-h">
-            <span>Kul bill se kitna aaya</span>
+            <span>${t("collected_pct")}</span>
             <strong>${bs.collectedPct}%</strong>
           </div>
           <div class="bs-bar"><i style="width:${bs.collectedPct}%"></i></div>
-          <div class="bs-meter-f">Aaya ₹ ${rupee(bs.paidAll)} · Bill ₹ ${rupee(bs.billedAll)}</div>
+          <div class="bs-meter-f">${t("got_billed", { a: rupee(bs.paidAll), b: rupee(bs.billedAll) })}</div>
         </div>
         <div class="bs-cols">
           <div class="bs-col">
-            <div class="bs-col-h">Assets · jo hamare hain</div>
-            <div class="bs-line"><span>Customer udhari (pending paise)</span><b>₹ ${rupee(bs.receivable)}</b></div>
-            <div class="bs-line mute"><span>Cash / bank (app mein nahi)</span><b>—</b></div>
-            <div class="bs-line total"><span>Total assets</span><b>₹ ${rupee(bs.assets)}</b></div>
+            <div class="bs-col-h">${t("assets_h")}</div>
+            <div class="bs-line"><span>${t("cust_udhari")}</span><b>₹ ${rupee(bs.receivable)}</b></div>
+            <div class="bs-line mute"><span>${t("cash_out")}</span><b>—</b></div>
+            <div class="bs-line total"><span>${t("tot_assets")}</span><b>₹ ${rupee(bs.assets)}</b></div>
           </div>
           <div class="bs-col">
-            <div class="bs-col-h">Liabilities + capital</div>
-            <div class="bs-line"><span>Customer advance</span><b>₹ ${rupee(bs.advance)}</b></div>
-            <div class="bs-line"><span>Capital / net udhari</span><b>₹ ${rupee(bs.equity)}</b></div>
+            <div class="bs-col-h">${t("liab_h")}</div>
+            <div class="bs-line"><span>${t("cust_adv")}</span><b>₹ ${rupee(bs.advance)}</b></div>
+            <div class="bs-line"><span>${t("cap_udhari")}</span><b>₹ ${rupee(bs.equity)}</b></div>
             <div class="bs-line total"><span>Total</span><b>₹ ${rupee(bs.liabEquity)}</b></div>
           </div>
         </div>
         <p class="bs-balance ${Math.abs(bs.assets - bs.liabEquity) < 0.05 ? "ok" : ""}">
-          ${Math.abs(bs.assets - bs.liabEquity) < 0.05 ? "Books tally · Assets = Liabilities + Capital" : "Check numbers"}
+          ${Math.abs(bs.assets - bs.liabEquity) < 0.05 ? t("books_ok") : t("check_n")}
         </p>
-        <div class="bs-sec-h">Period account · ${range.label}</div>
+        <div class="bs-sec-h">${t("period_acc")} · ${range.label}</div>
         <div class="bs-lines">
-          <div class="bs-line"><span>Is period mein dale (credit sale)</span><b>${bs.periodJars} jar · ₹ ${rupee(bs.periodSales)}</b></div>
-          <div class="bs-line"><span>Is period mein payment aaya</span><b>₹ ${rupee(bs.periodCollected)}</b></div>
-          <div class="bs-line gold"><span>Abhi pending paise (sab customers)</span><b>₹ ${rupee(bs.receivable)}</b></div>
+          <div class="bs-line"><span>${t("credit_sale")}</span><b>${bs.periodJars} jar · ₹ ${rupee(bs.periodSales)}</b></div>
+          <div class="bs-line"><span>${t("period_pay")}</span><b>₹ ${rupee(bs.periodCollected)}</b></div>
+          <div class="bs-line gold"><span>${t("all_pending_m")}</span><b>₹ ${rupee(bs.receivable)}</b></div>
         </div>
-        <div class="bs-sec-h">Jar statement · ${range.label}</div>
+        <div class="bs-sec-h">${t("jar_stmt")} · ${range.label}</div>
         <div class="bs-jar">
-          <div><em>${j.filledOut}</em><span>Plant se gaye</span></div>
-          <div><em>${j.credit}</em><span>Customer ko</span></div>
-          <div><em>${j.rokda}</em><span>Rokda</span></div>
-          <div><em>${j.leak}</em><span>Cap / gira</span></div>
-          <div><em>${j.broke}</em><span>Toot</span></div>
-          <div><em>${j.empty}</em><span>Khali aaye</span></div>
-          <div><em>${j.filledBack}</em><span>Bhare wapas</span></div>
-          <div class="hot"><em>${j.pendingMarket}</em><span>Market mein jar</span></div>
+          <div><em>${j.filledOut}</em><span>${t("plant_went")}</span></div>
+          <div><em>${j.credit}</em><span>${t("shop_gave")}</span></div>
+          <div><em>${j.rokda}</em><span>${t("cash_sold")}</span></div>
+          <div><em>${j.leak}</em><span>${t("cap_title")}</span></div>
+          <div><em>${j.broke}</em><span>${t("jar_broke_s")}</span></div>
+          <div><em>${j.empty}</em><span>${t("shop_empty_s")}</span></div>
+          <div><em>${j.filledBack}</em><span>${t("filled_in")}</span></div>
+          <div class="hot"><em>${j.pendingMarket}</em><span>${t("at_shops")}</span></div>
         </div>
-        <p class="bs-note">Market jar = khali uthana baki. Yeh paisa nahi. Rokda ka paisa yahan nahi, sirf jar count.</p>
         ${bs.periodPays.length ? `
-          <div class="bs-sec-h">Is period ke payments</div>
+          <div class="bs-sec-h">${t("period_pays")}</div>
           <table class="bs-table">
-            <thead><tr><th>Date</th><th>Customer</th><th>Mahina</th><th class="num">₹</th></tr></thead>
+            <thead><tr><th>${t("date")}</th><th>${t("customer")}</th><th>${t("month")}</th><th class="num">₹</th></tr></thead>
             <tbody>
               ${bs.periodPays.map((p) => `
                 <tr>
@@ -1127,9 +1146,9 @@ function renderOwnerSheet(range) {
           </table>
         ` : ""}
         ${bs.debtors.length ? `
-          <div class="bs-sec-h">Udhari list · ${bs.debtorCount} customer</div>
+          <div class="bs-sec-h">${t("udhari_list")} · ${bs.debtorCount}</div>
           <table class="bs-table">
-            <thead><tr><th>Customer</th><th>Driver</th><th class="num">Pending ₹</th></tr></thead>
+            <thead><tr><th>${t("customer")}</th><th>${t("delivery_man")}</th><th class="num">${t("pending_rupee")}</th></tr></thead>
             <tbody>
               ${bs.debtors.map((c) => `
                 <tr>
@@ -1140,11 +1159,11 @@ function renderOwnerSheet(range) {
               `).join("")}
             </tbody>
           </table>
-        ` : `<p class="bs-note">Kisi customer ke pending paise nahi — ya rate / payment set nahi.</p>`}
+        ` : `<p class="bs-note">${t("no_dues")}</p>`}
         ${bs.byDriver.length ? `
-          <div class="bs-sec-h">Driver wise</div>
+          <div class="bs-sec-h">${t("dm_wise")}</div>
           <table class="bs-table">
-            <thead><tr><th>Driver</th><th class="num">Dale</th><th class="num">Market jar</th><th class="num">Udhari ₹</th></tr></thead>
+            <thead><tr><th>${t("delivery_man")}</th><th class="num">${t("gave_col")}</th><th class="num">${t("market_jar")}</th><th class="num">${t("udhari_rupee")}</th></tr></thead>
             <tbody>
               ${bs.byDriver.map((d) => `
                 <tr>
@@ -1158,8 +1177,8 @@ function renderOwnerSheet(range) {
           </table>
         ` : ""}
         <div class="bs-foot">
-          <div>E. &amp; O.E. · Rate aaj ka. Purana bill rate change se badal sakta hai.</div>
-          <div>Prepared ${billDate(businessDate())}</div>
+          <div>${t("eoe")}</div>
+          <div>${t("prepared")} ${billDate(businessDate())}</div>
         </div>
       </section>
     </main>
@@ -1178,21 +1197,21 @@ function renderOwnerBill(customerId, range) {
   const path = periodPath(range);
   const c = led.customer;
   if (!c) {
-    app.innerHTML = `${header({ subtitle: "Customer nahi mila", showTimer: false })}<main class="wrap"><a class="back-link" href="#/owner/${path}">← Dashboard</a></main>`;
+    app.innerHTML = `${header({ subtitle: t("cust_miss"), showTimer: false })}<main class="wrap"><a class="back-link" href="#/owner/${path}">${t("back_dash")}</a></main>`;
     return;
   }
   const inv = invoiceNo(c, range);
   const rateOk = led.rate > 0;
   app.innerHTML = `
-    ${header({ subtitle: "Bill · " + c.name, date: range.to, showTimer: false })}
+    ${header({ subtitle: t("bill") + " · " + c.name, date: range.to, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="#/owner/${path}">← Dashboard</a>
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
       ${ownerPeriodTabs(`#/owner/bill/${customerId}`, range)}
-      ${rateOk ? "" : `<div class="banner no-print">Is customer ka rate nahi hai. <b>Customer / rate</b> dabao, ₹ likho, phir bill amount aayega.</div>`}
+      ${rateOk ? "" : `<div class="banner no-print">${t("no_rate")}</div>`}
       <div class="row-btns no-print" style="margin-bottom:12px">
-        <button type="button" class="ghost" data-act="edit-cust" data-id="${c.id}">Customer / rate</button>
-        <button type="button" class="primary" data-act="bill-print">Print</button>
-        <button type="button" class="ghost" data-act="bill-save">Save image</button>
+        <button type="button" class="ghost" data-act="edit-cust" data-id="${c.id}">${t("cust_rate")}</button>
+        <button type="button" class="primary" data-act="bill-print">${t("print")}</button>
+        <button type="button" class="ghost" data-act="bill-save">${t("save_img")}</button>
       </div>
       <section class="bill-sheet" id="bill-sheet">
         <div class="bill-copy">ORIGINAL FOR RECIPIENT</div>
@@ -1214,7 +1233,7 @@ function renderOwnerBill(customerId, range) {
             <div class="bill-k">Bill To</div>
             <div class="bill-name">${c.name}</div>
             ${c.place ? `<div>${c.place}</div>` : ""}
-            <div class="muted">Route: ${led.driver?.name || "—"}</div>
+            <div class="muted">${t("route_l")}: ${led.driver?.name || "—"}</div>
           </div>
           <div>
             <div class="bill-k">From</div>
@@ -1228,7 +1247,7 @@ function renderOwnerBill(customerId, range) {
           <thead>
             <tr>
               <th class="num">#</th>
-              <th>Date</th>
+              <th>${t("date")}</th>
               <th>Particulars</th>
               <th class="num">Qty</th>
               <th class="num">Rate (₹)</th>
@@ -1245,7 +1264,7 @@ function renderOwnerBill(customerId, range) {
                 <td class="num">${rupee(led.rate)}</td>
                 <td class="num">${rupee(l.jars * led.rate)}</td>
               </tr>
-            `).join("") : `<tr><td colspan="6" class="bill-empty">Is period mein koi delivery nahi.</td></tr>`}
+            `).join("") : `<tr><td colspan="6" class="bill-empty">${t("no_del")}</td></tr>`}
           </tbody>
         </table>
         </div>
@@ -1276,37 +1295,37 @@ function renderOwnerBill(customerId, range) {
         </div>
       </section>
       <section class="pay-box no-print">
-        <h3>Payment / pichle pending paise</h3>
+        <h3>${t("pay_h")}</h3>
         <div class="kpis kpis-3">
-          <div class="kpi"><b>₹ ${rupee(led.billed)}</b><span>Kul bill (sab jar × rate)</span></div>
-          <div class="kpi"><b>₹ ${rupee(led.paid)}</b><span>Kul paise aaye</span></div>
-          <div class="kpi ${led.due > 0 ? "kpi-warn" : ""}"><b>₹ ${rupee(led.due)}</b><span>${led.due < 0 ? "Advance" : "Pichle pending paise"}</span></div>
+          <div class="kpi"><b>₹ ${rupee(led.billed)}</b><span>${t("tot_bill")}</span></div>
+          <div class="kpi"><b>₹ ${rupee(led.paid)}</b><span>${t("tot_got")}</span></div>
+          <div class="kpi ${led.due > 0 ? "kpi-warn" : ""}"><b>₹ ${rupee(led.due)}</b><span>${led.due < 0 ? t("advance") : t("old_pending")}</span></div>
         </div>
-        <p class="muted">Is period: ${led.jars} jar × ₹ ${rupee(led.rate)} = ₹ ${rupee(led.amount)}. Malik yahan likhe kitne diye aur konse mahine ke.</p>
+        <p class="muted">${t("period_line", { j: led.jars, r: rupee(led.rate), a: rupee(led.amount) })}</p>
         <form data-form="pay" data-id="${c.id}">
           <div class="pay-grid">
-            <div class="field"><label>Kitne paise aaye (₹)</label><input name="amount" type="number" inputmode="decimal" step="1" min="1" required placeholder="Jaise 1500" /></div>
-            <div class="field"><label>Konse mahine ke</label><input name="month" type="month" value="${range.month || String(range.to || "").slice(0, 7)}" required /></div>
+            <div class="field"><label>${t("amt_in")}</label><input name="amount" type="number" inputmode="decimal" step="1" min="1" required placeholder="${t("amt_ph")}" /></div>
+            <div class="field"><label>${t("for_month")}</label><input name="month" type="month" value="${range.month || String(range.to || "").slice(0, 7)}" required /></div>
           </div>
-          <button class="primary" type="submit" style="width:100%;margin-top:8px">Payment save</button>
+          <button class="primary" type="submit" style="width:100%;margin-top:8px">${t("pay_save")}</button>
         </form>
         ${led.payments?.length ? `
           <div class="ow-scroll" style="margin-top:14px">
             <table class="ow-table">
-              <thead><tr><th>Date</th><th>Mahina</th><th>Paise</th><th></th></tr></thead>
+              <thead><tr><th>${t("date")}</th><th>${t("month")}</th><th>${t("paise")}</th><th></th></tr></thead>
               <tbody>
                 ${led.payments.map((p) => `
                   <tr>
                     <td>${billDate(p.paid_on)}</td>
                     <td>${monthLabel(p.for_month)}</td>
                     <td>₹ ${rupee(p.amount)}</td>
-                    <td><button type="button" class="ghost rate-btn" data-act="pay-del" data-id="${p.id}">Hatao</button></td>
+                    <td><button type="button" class="ghost rate-btn" data-act="pay-del" data-id="${p.id}">${t("remove")}</button></td>
                   </tr>
                 `).join("")}
               </tbody>
             </table>
           </div>
-        ` : `<p class="muted" style="margin-top:10px">Abhi koi payment nahi likha.</p>`}
+        ` : `<p class="muted" style="margin-top:10px">${t("no_pay")}</p>`}
       </section>
     </main>
     ${ownerNav(range)}
@@ -1318,13 +1337,13 @@ function modalHtml({ title, name = "", place = "", rate = "", id = "", mode = "a
     <div class="modal-bg" data-act="add-close">
       <form class="modal" data-form="${mode}" data-id="${id}">
         <h3>${title}</h3>
-        <div class="field"><label>Customer ka naam</label><input name="name" required value="${name}" /></div>
-        <div class="field"><label>Place / area (optional)</label><input name="place" value="${place}" placeholder="Jaise MIDC, Ramanand Nagar — khali chhod sakte ho" /></div>
-        ${showRate ? `<div class="field"><label>Jar ka rate (₹)</label><input name="rate" type="number" inputmode="decimal" step="0.5" min="0" value="${rate === 0 || rate ? rate : ""}" placeholder="Jaise 30" /></div>` : ""}
+        <div class="field"><label>${t("cust_name")}</label><input name="name" required value="${name}" /></div>
+        <div class="field"><label>${t("place_opt")}</label><input name="place" value="${place}" placeholder="${t("place_ph")}" /></div>
+        ${showRate ? `<div class="field"><label>${t("jar_rate")}</label><input name="rate" type="number" inputmode="decimal" step="0.5" min="0" value="${rate === 0 || rate ? rate : ""}" placeholder="${t("rate_ph")}" /></div>` : ""}
         <div class="row-btns">
-          <button type="button" class="ghost" data-act="add-close">Band</button>
-          ${mode === "edit" ? `<button type="button" class="ghost" data-act="deactivate" data-id="${id}">Hatao</button>` : ""}
-          <button type="submit" class="primary">Save</button>
+          <button type="button" class="ghost" data-act="add-close">${t("close")}</button>
+          ${mode === "edit" ? `<button type="button" class="ghost" data-act="deactivate" data-id="${id}">${t("remove")}</button>` : ""}
+          <button type="submit" class="primary">${t("save")}</button>
         </div>
       </form>
     </div>
@@ -1335,8 +1354,8 @@ function openAdd(prefill) {
   closeModal();
   const showRate = isOwnerRoute();
   document.body.insertAdjacentHTML("beforeend", prefill
-    ? modalHtml({ title: showRate ? "Customer / rate" : "Customer edit", ...prefill, mode: "edit", showRate })
-    : modalHtml({ title: "Naya customer", mode: "add", showRate: false }));
+    ? modalHtml({ title: showRate ? t("cust_rate") : t("cust_edit"), ...prefill, mode: "edit", showRate })
+    : modalHtml({ title: t("new_cust_t"), mode: "add", showRate: false }));
   document.querySelector(showRate ? ".modal input[name=rate]" : ".modal input[name=name]")?.focus();
 }
 
@@ -1349,12 +1368,12 @@ function openDriverModal() {
   document.body.insertAdjacentHTML("beforeend", `
     <div class="modal-bg" data-act="add-close">
       <form class="modal" data-form="add-driver">
-        <h3>Naya Jar Supply</h3>
-        <div class="field"><label>Naam</label><input name="name" required placeholder="Chetan" /></div>
-        <p class="muted">Save ke baad key milegi. WhatsApp pe bhej dena.</p>
+        <h3>${t("new_dm")}</h3>
+        <div class="field"><label>${t("name")}</label><input name="name" required placeholder="Chetan" /></div>
+        <p class="muted">${t("key_hint")}</p>
         <div class="row-btns">
-          <button type="button" class="ghost" data-act="add-close">Band</button>
-          <button type="submit" class="primary">Key banao</button>
+          <button type="button" class="ghost" data-act="add-close">${t("close")}</button>
+          <button type="submit" class="primary">${t("make_key")}</button>
         </div>
       </form>
     </div>
@@ -1473,7 +1492,7 @@ async function render(opts = {}) {
   const y = keepScroll ? window.scrollY : 0;
   keepScroll = false;
   const r0 = parseHash();
-  const authView = r0.view === "login" || r0.view === "signup";
+  const authView = r0.view === "login" || r0.view === "signup" || r0.view === "start";
   const owner = isOwnerRoute();
   if (!opts.skipLoad) await load({ roleWanted: authView ? "driver" : owner ? "owner" : "driver" });
   const st = getState();
@@ -1492,19 +1511,20 @@ async function render(opts = {}) {
     }
     document.body.classList.add("auth-body");
     if (r0.view === "signup") renderSignup();
-    else renderLogin(r0.mode);
+    else if (r0.view === "login") renderLogin(r0.mode);
+    else renderWelcome();
     window.scrollTo(0, 0);
     return;
   }
   document.body.classList.remove("auth-body");
   if (st.needsAuth) {
     haltOwnerLive();
-    location.hash = owner ? "#/login" : "#/login/driver";
+    location.hash = "#/start";
     return;
   }
   if (st.error && !st.device) {
     haltOwnerLive();
-    app.innerHTML = `${header({ subtitle: "Error", showTimer: false })}<main class="wrap"><div class="banner">${st.error}</div></main>`;
+    app.innerHTML = `${header({ subtitle: t("error"), showTimer: false })}<main class="wrap"><div class="banner">${st.error}</div></main>`;
     return;
   }
   if (session?.role === "owner" && !owner) {
@@ -1512,7 +1532,7 @@ async function render(opts = {}) {
     return;
   }
   if (st.error) {
-    app.innerHTML = `${header({ subtitle: "Error", showTimer: false })}<main class="wrap"><div class="banner">${st.error}</div></main>`;
+    app.innerHTML = `${header({ subtitle: t("error"), showTimer: false })}<main class="wrap"><div class="banner">${st.error}</div></main>`;
     return;
   }
   const r = parseHash();
@@ -1548,6 +1568,18 @@ function startTimer() {
       if (date !== businessDate()) return;
       el.textContent = formatRemain(remainingMs(date));
     });
+    document.querySelectorAll("[data-wait-sec]").forEach((el) => {
+      const left = loginWaitLeft();
+      if (left <= 0) {
+        if (loginWaitUntil) {
+          loginWaitUntil = 0;
+          const r = parseHash();
+          if (r.view === "login") renderLogin(r.mode);
+        }
+        return;
+      }
+      el.textContent = String(left);
+    });
   }, 1000);
 }
 
@@ -1565,10 +1597,10 @@ async function run(fn) {
 }
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-act]");
-  if (!t) return;
-  const act = t.dataset.act;
-  const id = t.dataset.id;
+  const el = ev.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = el.dataset.id;
   const date = app.dataset.date || parseHash().date || businessDate();
 
   if (act === "add-open") openAdd();
@@ -1576,7 +1608,7 @@ document.addEventListener("click", (ev) => {
     ev.preventDefault();
     run(async () => {
       await logout();
-      location.hash = "#/login";
+      location.hash = "#/start";
       await render();
     });
     return;
@@ -1590,8 +1622,8 @@ document.addEventListener("click", (ev) => {
   if (act === "copy-key") {
     ev.preventDefault();
     ev.stopPropagation();
-    const key = t.dataset.key || "";
-    if (key) navigator.clipboard?.writeText(key).then(() => alert("Key copy ho gayi: " + key)).catch(() => alert(key));
+    const key = el.dataset.key || "";
+    if (key) navigator.clipboard?.writeText(key).then(() => alert(t("key_copy", { k: key }))).catch(() => alert(key));
     return;
   }
   if (act === "make-key") {
@@ -1599,7 +1631,7 @@ document.addEventListener("click", (ev) => {
     ev.stopPropagation();
     run(async () => {
       const key = await ensureDriverKey(id);
-      alert("Supply key: " + key);
+      alert(t("login_key_is", { k: key }));
       keepScroll = true;
       await render();
     });
@@ -1609,26 +1641,26 @@ document.addEventListener("click", (ev) => {
     ev.preventDefault();
     const input = document.querySelector("form[data-form=signup] input[name=username]");
     if (input) {
-      input.value = t.dataset.user || "";
+      input.value = el.dataset.user || "";
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     return;
   }
   if (act === "add-close") {
-    if (t.classList.contains("modal-bg") && ev.target !== t) return;
+    if (el.classList.contains("modal-bg") && ev.target !== el) return;
     closeModal();
   }
   if (act === "rename") {
     const d = getDriver();
-    const name = prompt("Naam", d?.name || "");
+    const name = prompt(t("name"), d?.name || "");
     if (name) run(async () => { await renameDriver(name); await render(); });
   }
   if (act === "trip-bump") {
-    bumpTrip(date, t.dataset.field, Number(t.dataset.delta));
+    bumpTrip(date, el.dataset.field, Number(el.dataset.delta));
     paintFast();
   }
   if (act === "bump") {
-    bump(date, id, t.dataset.field, Number(t.dataset.delta));
+    bump(date, id, el.dataset.field, Number(el.dataset.delta));
     paintFast();
   }
   if (act === "usual") {
@@ -1647,7 +1679,7 @@ document.addEventListener("click", (ev) => {
   if (act === "seq-down") run(async () => { await moveSequence(date, null, id, 1); keepScroll = true; await render(); });
   if (act === "hash") {
     ev.preventDefault();
-    const go = t.dataset.go || "";
+    const go = el.dataset.go || "";
     if (go && location.hash !== go) location.hash = go;
     else if (go) run(render);
     return;
@@ -1666,12 +1698,12 @@ document.addEventListener("click", (ev) => {
     if (c) openAdd({ name: c.name, place: c.place || "", rate: c.jarRate || 0, id: c.id });
   }
   if (act === "deactivate") {
-    if (confirm("Is customer ko hataayein?")) {
+    if (confirm(t("del_cust"))) {
       run(async () => { await deactivateCustomer(id); closeModal(); await render(); });
     }
   }
   if (act === "pay-del") {
-    if (confirm("Yeh payment hataayein?")) {
+    if (confirm(t("del_pay"))) {
       run(async () => { await removePayment(id); keepScroll = true; await render(); });
     }
   }
@@ -1715,21 +1747,21 @@ document.addEventListener("input", (ev) => {
     const u = normalizeUsername(user.value);
     clearTimeout(userCheckTimer);
     if (u.length < 3) {
-      if (status) status.innerHTML = `<span class="muted">Kam se kam 3 letters</span>`;
+      if (status) status.innerHTML = `<span class="muted">${t("user_min")}</span>`;
       if (ideas) ideas.innerHTML = "";
       return;
     }
-    if (status) status.textContent = "Check...";
+    if (status) status.textContent = t("checking");
     userCheckTimer = setTimeout(async () => {
       try {
         const taken = await usernameTaken(u);
         if (normalizeUsername(user.value) !== u) return;
         if (taken) {
-          if (status) status.innerHTML = `<span class="bad">@${u} le liya gaya</span>`;
+          if (status) status.innerHTML = `<span class="bad">${t("taken", { u })}</span>`;
           const opts = usernameSuggestions(u, new Set([u]));
           if (ideas) ideas.innerHTML = opts.map((x) => `<button type="button" class="idea" data-act="pick-user" data-user="${x}">${x}</button>`).join("");
         } else {
-          if (status) status.innerHTML = `<span class="ok">@${u} available</span>`;
+          if (status) status.innerHTML = `<span class="ok">${t("free", { u })}</span>`;
           if (ideas) ideas.innerHTML = "";
         }
       } catch (err) {
@@ -1749,6 +1781,13 @@ document.addEventListener("input", (ev) => {
 });
 
 document.addEventListener("change", (ev) => {
+  const lang = ev.target.closest("[data-act=lang]");
+  if (lang) {
+    setLang(lang.value);
+    keepScroll = true;
+    render({ skipLoad: true, skipOwnerFetch: true });
+    return;
+  }
   const month = ev.target.closest("[data-act=owner-month]");
   if (month && month.value) {
     const base = month.dataset.base || "#/owner";
@@ -1764,9 +1803,9 @@ document.addEventListener("focusout", (ev) => {
     paintFast();
     return;
   }
-  const t = ev.target.closest("[data-act=set]");
-  if (!t) return;
-  setCount(date, t.dataset.id, t.dataset.field, t.value);
+  const inp = ev.target.closest("[data-act=set]");
+  if (!inp) return;
+  setCount(date, inp.dataset.id, inp.dataset.field, inp.value);
   paintFast();
 });
 
@@ -1783,17 +1822,31 @@ document.addEventListener("submit", (ev) => {
   }
   if (form.dataset.form === "login-owner") {
     run(async () => {
-      await loginOwner({ username: fd.get("username"), password: fd.get("password") });
-      location.hash = "#/owner";
-      await render();
+      try {
+        await loginOwner({ username: fd.get("username"), password: fd.get("password") });
+        loginWaitUntil = 0;
+        location.hash = "#/owner";
+        await render();
+      } catch (err) {
+        noteLoginWait(err);
+        renderLogin("owner");
+        throw err;
+      }
     });
     return;
   }
   if (form.dataset.form === "login-driver") {
     run(async () => {
-      await loginDriverAccount({ username: fd.get("username"), key: fd.get("key") });
-      location.hash = "#/";
-      await render();
+      try {
+        await loginDriverAccount({ username: fd.get("username"), key: fd.get("key") });
+        loginWaitUntil = 0;
+        location.hash = "#/";
+        await render();
+      } catch (err) {
+        noteLoginWait(err);
+        renderLogin("driver");
+        throw err;
+      }
     });
     return;
   }
@@ -1801,7 +1854,7 @@ document.addEventListener("submit", (ev) => {
     run(async () => {
       const pass = String(fd.get("password") || "");
       const confirm = String(fd.get("confirm") || "");
-      if (pass !== confirm) throw new Error("Password match nahi karta.");
+      if (pass !== confirm) throw new Error(t("pass_bad"));
       await signupOwner({ username: fd.get("username"), firmName: fd.get("firm"), password: pass });
       location.hash = "#/owner";
       await render();
@@ -1812,7 +1865,7 @@ document.addEventListener("submit", (ev) => {
     run(async () => {
       const row = await addDriverAccount(String(fd.get("name") || ""));
       closeModal();
-      alert("Supply key: " + row.login_key + "\nYeh key Jar Supply wale ko do. Company username alag se.");
+      alert(t("login_key_is", { k: row.login_key }) + "\n" + t("give_key"));
       keepScroll = true;
       await render();
     });

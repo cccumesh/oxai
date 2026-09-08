@@ -1,4 +1,4 @@
 export const SETTINGS = {
-  dayStartHour: 5,
-  dayDurationHours: 17,
+  dayStartHour: 0,
+  dayDurationHours: 24,
 };

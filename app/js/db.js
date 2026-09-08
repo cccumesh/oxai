@@ -1,6 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
 import { getSession } from "./auth.js";
+import { t, serverMsg } from "./i18n.js";
 
 let client = null;
 let authToken = "";
@@ -72,9 +73,9 @@ export function subscribeOwnerLive(onChange) {
 function denyMsg(err) {
   const m = String(err?.message || err || "");
   if (/row-level security|permission denied|JWT/i.test(m)) {
-    return "Session khatam ya SQL lock nahi chala. sanjay_aqua_full.sql Run karo, phir login karo.";
+    return t("err_sess");
   }
-  return m.replace(/^.*ERROR:\s*/i, "").split("\n")[0];
+  return serverMsg(m);
 }
 
 function ok(res) {
@@ -85,7 +86,7 @@ function ok(res) {
 function rpcErr(err) {
   const m = String(err?.message || err || "");
   if (/Could not find the function|schema cache/i.test(m)) {
-    return new Error("Login SQL nahi chali. Supabase SQL Editor mein sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+    return new Error(t("err_fn"));
   }
   return new Error(denyMsg(err));
 }
@@ -111,7 +112,7 @@ export async function signupOrg(username, firmName, password) {
     p_password: password,
   });
   if (!row?.session_token) {
-    throw new Error("Security SQL nahi chali. sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+    throw new Error(t("err_sql"));
   }
   return row;
 }
@@ -119,7 +120,7 @@ export async function signupOrg(username, firmName, password) {
 export async function loginOrg(username, password) {
   const row = await rpc("sa_login_org", { p_username: username, p_password: password });
   if (!row?.session_token) {
-    throw new Error("Security SQL nahi chali. sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+    throw new Error(t("err_sql"));
   }
   return row;
 }
@@ -127,7 +128,7 @@ export async function loginOrg(username, password) {
 export async function loginDriver(username, key) {
   const row = await rpc("sa_login_driver", { p_username: username, p_key: key });
   if (!row?.session_token) {
-    throw new Error("Security SQL nahi chali. sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+    throw new Error(t("err_sql"));
   }
   return row;
 }
@@ -137,6 +138,23 @@ export async function logoutSession() {
     await rpc("sa_logout", {});
   } catch {}
   useAuthToken("");
+}
+
+export async function whoami() {
+  try {
+    return await rpc("sa_whoami", {});
+  } catch (err) {
+    const m = String(err.message || "");
+    if (/Could not find the function|schema cache/i.test(m)) return { missing: true };
+    if (/Session khatam/i.test(m)) return null;
+    throw err;
+  }
+}
+
+export async function bindDevice(deviceId) {
+  try {
+    await rpc("sa_bind_device", { p_device: deviceId });
+  } catch {}
 }
 
 export async function fetchDevice(id) {
@@ -155,9 +173,9 @@ export async function insertDevice(row) {
       delete payload[missing[1]];
       continue;
     }
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
-  throw new Error("Device save nahi hua");
+  throw new Error(t("err_dev"));
 }
 
 export async function updateDevice(id, patch) {
@@ -195,9 +213,9 @@ export async function insertCustomer(row) {
       delete payload[missing[1]];
       continue;
     }
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
-  throw new Error("Customer save nahi hua");
+  throw new Error(t("err_csave"));
 }
 
 export async function updateCustomerRow(id, patch) {
@@ -208,15 +226,15 @@ export async function updateCustomerRow(id, patch) {
     if (!res.error) return res.data;
     const missing = String(res.error.message || "").match(/Could not find the '([^']+)' column/);
     if (missing?.[1] === "jar_rate" && wantRate) {
-      throw new Error("Rate save nahi hua. Supabase SQL Editor mein sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+      throw new Error(t("err_rsave"));
     }
     if (missing && missing[1] in payload) {
       delete payload[missing[1]];
       continue;
     }
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
-  throw new Error("Customer update nahi hua");
+  throw new Error(t("err_cupd"));
 }
 
 export async function listDeliveries(deviceId, date, orgId) {
@@ -278,7 +296,7 @@ export async function listPayments(orgId) {
   const res = await q;
   if (res.error) {
     if (missingPaymentsTable(res.error)) return [];
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
   return res.data || [];
 }
@@ -287,16 +305,16 @@ export async function insertPayment(row) {
   const res = await getClient().from("sa_payments").insert(row).select().single();
   if (res.error) {
     if (missingPaymentsTable(res.error)) {
-      throw new Error("Payment save nahi hua. Supabase SQL Editor mein sanjay_aqua_full.sql poora Run karo, phir Ctrl+Shift+R.");
+      throw new Error(t("err_psave"));
     }
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
   return res.data;
 }
 
 export async function deletePayment(id) {
   const res = await getClient().from("sa_payments").delete().eq("id", id);
-  if (res.error) throw new Error(res.error.message);
+  if (res.error) throw new Error(serverMsg(res.error.message));
   return true;
 }
 
@@ -369,7 +387,7 @@ export async function upsertTrip(row) {
       delete payload[missing[1]];
       continue;
     }
-    throw new Error(res.error.message);
+    throw new Error(serverMsg(res.error.message));
   }
-  throw new Error("Trip save nahi hua");
+  throw new Error(t("err_tsave"));
 }

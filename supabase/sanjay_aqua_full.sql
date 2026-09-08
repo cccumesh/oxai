@@ -112,6 +112,15 @@ create index if not exists sa_day_trips_org_date on sa_day_trips (org_id, work_d
 create index if not exists sa_payments_org on sa_payments (org_id);
 create index if not exists sa_sessions_org on sa_sessions (org_id);
 
+create table if not exists sa_login_guard (
+  username text primary key,
+  fails int not null default 0,
+  wait_sec int not null default 30,
+  lock_until timestamptz,
+  unlocked_at timestamptz,
+  hot boolean not null default false
+);
+
 -- 4) Security (har plant ka data alag)
 alter table sa_devices enable row level security;
 alter table sa_customers enable row level security;
@@ -120,6 +129,7 @@ alter table sa_day_trips enable row level security;
 alter table sa_payments enable row level security;
 alter table sa_sessions enable row level security;
 alter table sa_orgs enable row level security;
+alter table sa_login_guard enable row level security;
 
 drop policy if exists sa_devices_all on sa_devices;
 drop policy if exists sa_customers_all on sa_customers;
@@ -147,6 +157,7 @@ drop policy if exists sa_payments_owner on sa_payments;
 
 revoke all on sa_orgs from anon, authenticated, public;
 revoke all on sa_sessions from anon, authenticated, public;
+revoke all on sa_login_guard from anon, authenticated, public;
 
 create or replace function sa_norm_user(p text)
 returns text language sql immutable as $$
@@ -297,6 +308,77 @@ $$;
 
 drop function if exists sa_signup_org(text, text, text);
 
+create or replace function sa_login_wait(p_user text)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  g sa_login_guard%rowtype;
+  v_left int;
+begin
+  select * into g from sa_login_guard where username = p_user;
+  if found and g.lock_until is not null and g.lock_until > now() then
+    v_left := greatest(1, ceil(extract(epoch from g.lock_until - now()))::int);
+    raise exception 'Ruko, % second baad try karo.', v_left;
+  end if;
+end;
+$$;
+
+create or replace function sa_login_fail(p_user text)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  g sa_login_guard%rowtype;
+  v_wait int;
+begin
+  perform sa_login_wait(p_user);
+  insert into sa_login_guard (username, fails, wait_sec, hot)
+  values (p_user, 0, 30, false)
+  on conflict (username) do nothing;
+  select * into g from sa_login_guard where username = p_user;
+  if g.fails = 0 then
+    if g.unlocked_at is not null and now() <= g.unlocked_at + interval '30 seconds' then
+      g.hot := true;
+    else
+      g.hot := false;
+      g.wait_sec := 30;
+    end if;
+  end if;
+  g.fails := g.fails + 1;
+  if g.fails < 4 then
+    update sa_login_guard
+      set fails = g.fails, wait_sec = g.wait_sec, hot = g.hot
+    where username = p_user;
+    return;
+  end if;
+  v_wait := case when g.hot then least(g.wait_sec + 30, 600) else 30 end;
+  update sa_login_guard
+    set fails = 0,
+        wait_sec = v_wait,
+        hot = false,
+        lock_until = now() + make_interval(secs => v_wait),
+        unlocked_at = now() + make_interval(secs => v_wait)
+  where username = p_user;
+  raise exception '4 galat try. % second baad try karo.', v_wait;
+end;
+$$;
+
+create or replace function sa_login_ok(p_user text)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+begin
+  delete from sa_login_guard where username = p_user;
+end;
+$$;
+
 create or replace function sa_signup_org(p_username text, p_firm text, p_password text)
 returns json
 language plpgsql
@@ -337,12 +419,18 @@ set search_path = public, extensions
 as $$
 declare
   r sa_orgs%rowtype;
+  v_user text;
+  v_key text;
 begin
-  select * into r from sa_orgs where username = sa_norm_user(p_username);
-  if not found then raise exception 'Username ya password galat'; end if;
-  if r.password_hash is distinct from extensions.crypt(p_password, r.password_hash) then
+  v_user := sa_norm_user(p_username);
+  v_key := 'owner:' || v_user;
+  perform sa_login_wait(v_key);
+  select * into r from sa_orgs where username = v_user;
+  if not found or r.password_hash is distinct from extensions.crypt(p_password, r.password_hash) then
+    perform sa_login_fail(v_key);
     raise exception 'Username ya password galat';
   end if;
+  perform sa_login_ok(v_key);
   return json_build_object(
     'org_id', r.id,
     'username', r.username,
@@ -361,19 +449,29 @@ as $$
 declare
   v_org sa_orgs%rowtype;
   v_dev sa_devices%rowtype;
+  v_user text;
+  v_guard text;
   v_key text;
 begin
-  select * into v_org from sa_orgs where username = sa_norm_user(p_username);
-  if not found then raise exception 'Company username galat'; end if;
+  v_user := sa_norm_user(p_username);
+  v_guard := 'driver:' || v_user;
+  perform sa_login_wait(v_guard);
+  select * into v_org from sa_orgs where username = v_user;
   v_key := upper(trim(replace(coalesce(p_key, ''), ' ', '')));
   v_key := replace(v_key, '-', '');
-  select * into v_dev
-  from sa_devices
-  where org_id = v_org.id
-    and role = 'driver'
-    and replace(upper(coalesce(login_key, '')), '-', '') = v_key
-  limit 1;
-  if not found then raise exception 'Driver key galat'; end if;
+  if found then
+    select * into v_dev
+    from sa_devices
+    where org_id = v_org.id
+      and role = 'driver'
+      and replace(upper(coalesce(login_key, '')), '-', '') = v_key
+    limit 1;
+  end if;
+  if v_org.id is null or v_dev.id is null then
+    perform sa_login_fail(v_guard);
+    raise exception 'Company username ya key galat';
+  end if;
+  perform sa_login_ok(v_guard);
   return json_build_object(
     'org_id', v_org.id,
     'username', v_org.username,
@@ -398,17 +496,74 @@ begin
 end;
 $$;
 
+create or replace function sa_whoami()
+returns json
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  s sa_sessions%rowtype;
+  o sa_orgs%rowtype;
+begin
+  select * into s
+  from sa_sessions
+  where token_hash = extensions.digest(sa_request_token(), 'sha256')
+    and expires_at > now()
+  limit 1;
+  if not found then raise exception 'Session khatam'; end if;
+  select * into o from sa_orgs where id = s.org_id;
+  return json_build_object(
+    'org_id', s.org_id,
+    'role', s.role,
+    'device_id', s.device_id,
+    'username', o.username,
+    'firm_name', o.firm_name
+  );
+end;
+$$;
+
+create or replace function sa_bind_device(p_device uuid)
+returns json
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  s sa_sessions%rowtype;
+  d sa_devices%rowtype;
+begin
+  select * into s
+  from sa_sessions
+  where token_hash = extensions.digest(sa_request_token(), 'sha256')
+    and expires_at > now()
+  limit 1;
+  if not found then raise exception 'Session khatam'; end if;
+  select * into d from sa_devices where id = p_device and org_id = s.org_id;
+  if not found then raise exception 'Device galat'; end if;
+  if s.role = 'driver' and d.id is distinct from s.device_id then
+    raise exception 'Device galat';
+  end if;
+  update sa_sessions set device_id = d.id where token_hash = s.token_hash;
+  return json_build_object('ok', true, 'device_id', d.id);
+end;
+$$;
+
 revoke all on function sa_username_taken(text) from public;
 revoke all on function sa_signup_org(text, text, text) from public;
 revoke all on function sa_login_org(text, text) from public;
 revoke all on function sa_login_driver(text, text) from public;
 revoke all on function sa_logout() from public;
+revoke all on function sa_whoami() from public;
+revoke all on function sa_bind_device(uuid) from public;
 revoke all on function sa_issue_session(uuid, uuid, text) from public;
 grant execute on function sa_username_taken(text) to anon, authenticated;
 grant execute on function sa_signup_org(text, text, text) to anon, authenticated;
 grant execute on function sa_login_org(text, text) to anon, authenticated;
 grant execute on function sa_login_driver(text, text) to anon, authenticated;
 grant execute on function sa_logout() to anon, authenticated;
+grant execute on function sa_whoami() to anon, authenticated;
+grant execute on function sa_bind_device(uuid) to anon, authenticated;
 grant execute on function sa_auth_org() to anon, authenticated;
 grant execute on function sa_auth_role() to anon, authenticated;
 grant execute on function sa_auth_device() to anon, authenticated;

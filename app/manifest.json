@@ -1,0 +1,8 @@
+{
+  "name": "Aqua Jar",
+  "short_name": "Aqua Jar",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#043047",
+  "theme_color": "#043047"
+}
