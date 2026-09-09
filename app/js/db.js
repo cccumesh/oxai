@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
-import { getSession } from "./auth.js?v=67";
-import { t, serverMsg } from "./i18n.js?v=67";
+import { getSession } from "./auth.js?v=68";
+import { t, serverMsg } from "./i18n.js?v=68";
 
 let client = null;
 let authToken = "";

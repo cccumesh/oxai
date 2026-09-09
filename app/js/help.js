@@ -1,5 +1,5 @@
-import { t, speakLocale } from "./i18n.js?v=67";
-import { getSession } from "./auth.js?v=67";
+import { t, speakLocale } from "./i18n.js?v=68";
+import { getSession } from "./auth.js?v=68";
 
 let state = { open: false, kind: "owner", i: 0, who: null, first: false, needPick: false };
 
@@ -95,13 +95,21 @@ function speak(text) {
 
 function speakBtn() {
   return `
-    <button type="button" class="speak-btn" data-act="tour-speak" aria-label="${t("tour_listen")}">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
-        <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-    </button>
+    <div class="speak-pair">
+      <button type="button" class="speak-btn" data-act="tour-speak" aria-label="${t("tour_listen")}">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+          <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button type="button" class="speak-btn pause-btn" data-act="tour-pause" aria-label="${t("pause")}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="5" width="4" height="14" rx="1"/>
+          <rect x="14" y="5" width="4" height="14" rx="1"/>
+        </svg>
+      </button>
+    </div>
   `;
 }
 
@@ -310,7 +318,10 @@ function paintTour() {
           <p class="tour-kicker">${state.first ? t("tour_first") : t("help")}</p>
           <h2 id="tour-title">${step.title}</h2>
         </div>
-        ${speakBtn()}
+        <div class="tour-head-actions">
+          ${speakBtn()}
+          <button type="button" class="tour-close" data-act="tour-close" aria-label="${t("tour_skip")}">×</button>
+        </div>
       </div>
       <div class="tour-dots">${list.map((_, i) => `<i class="${i === state.i ? "on" : ""}"></i>`).join("")}</div>
       <p class="tour-body">${step.body}</p>
@@ -358,7 +369,7 @@ document.addEventListener("click", (ev) => {
     state.i -= 1;
     paintTour();
   }
-  if (act === "tour-skip" || act === "tour-done") finishTour();
+  if (act === "tour-skip" || act === "tour-done" || act === "tour-close") finishTour();
   if (act === "tour-who") {
     state.who = el.dataset.who === "self" ? "self" : "hired";
     state.needPick = false;
@@ -366,4 +377,10 @@ document.addEventListener("click", (ev) => {
     paintTour();
   }
   if (act === "tour-speak") speakCurrent();
+  if (act === "tour-pause") {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    if (synth.speaking && !synth.paused) synth.pause();
+    else if (synth.paused) synth.resume();
+  }
 });

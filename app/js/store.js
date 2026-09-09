@@ -1,7 +1,7 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js?v=67";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=67";
-import { t, dateLocale } from "./i18n.js?v=67";
+import * as db from "./db.js?v=68";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=68";
+import { t, dateLocale } from "./i18n.js?v=68";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -1266,6 +1266,39 @@ export function ownerLossByDriver() {
     };
   }).filter((g) => g.leak > 0 || g.broke > 0)
     .sort((a, b) => (b.leak + b.broke) - (a.leak + a.broke));
+}
+
+/** Plant return mismatch: gine vs hone chahiye — kaun galat / kam laye. */
+export function ownerPlantReturnByDriver() {
+  const drivers = state.owner.drivers || [];
+  const trips = state.owner.rangeTrips || [];
+  const deliveries = (state.owner.rangeDeliveries || []).filter((r) => r.status === "complete");
+  const nameOf = Object.fromEntries(drivers.map((d) => [d.id, d.name]));
+  const byDriver = {};
+  for (const p of plantByDate(trips, deliveries)) {
+    if (!p.mismatch) continue;
+    const id = p.deviceId || "other";
+    if (!byDriver[id]) {
+      byDriver[id] = {
+        id,
+        name: nameOf[id] || "—",
+        days: [],
+        counted: 0,
+        expectTotal: 0,
+        gap: 0,
+      };
+    }
+    byDriver[id].days.push(p);
+    byDriver[id].counted += p.counted || 0;
+    byDriver[id].expectTotal += p.expectTotal || 0;
+    byDriver[id].gap += Math.abs((p.counted || 0) - (p.expectTotal || 0));
+  }
+  return Object.values(byDriver)
+    .map((g) => ({
+      ...g,
+      days: g.days.sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    }))
+    .sort((a, b) => b.gap - a.gap);
 }
 
 export function ownerDriverDetail(driverId) {

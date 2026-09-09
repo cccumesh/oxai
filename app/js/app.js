@@ -1,7 +1,7 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=67";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=67";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=67";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=68";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=68";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=68";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -14,9 +14,9 @@ import {
   ownerCustomerPeriodJars, ownerCustomerMoney, monthLabel, addPayment, removePayment,
   isMonthRegister, ownerDriverRegister, getFirmName,
   signupOwner, loginOwner, loginDriverAccount, addDriverAccount, ensureDriverKey, logout,
-  ownerExtraJars, stopMarketPreview,
-} from "./store.js?v=67";
-import { maybeStartTour, openTour } from "./help.js?v=67";
+  ownerExtraJars, stopMarketPreview, ownerPlantReturnByDriver,
+} from "./store.js?v=68";
+import { maybeStartTour, openTour } from "./help.js?v=68";
 
 const app = document.getElementById("app");
 let tick = null;
@@ -124,6 +124,9 @@ function parseHash() {
     }
     if (parts[1] === "extra") {
       return { view: "owner-extra", period: parts[2] || "today", month: parts[3] || "" };
+    }
+    if (parts[1] === "return") {
+      return { view: "owner-return", period: parts[2] || "today", month: parts[3] || "" };
     }
     if (parts[1] === "loss") {
       const kind = parts[2] === "cap" || parts[2] === "toot" ? parts[2] : "all";
@@ -340,13 +343,7 @@ function guideNote(key, vars) {
     <div class="guide-note">
       <div class="guide-top">
         <strong>${t("guide_title")}</strong>
-        <button type="button" class="speak-btn" data-act="speak-text" data-key="${key}" aria-label="${t("speak")}">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
-            <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </button>
+        ${speakPairHtml(`data-act="speak-text" data-key="${key}"`)}
       </div>
       <p>${t(key, vars)}</p>
     </div>
@@ -358,13 +355,7 @@ function ownerSetupCard() {
     <div class="setup-card">
       <div class="guide-top">
         <strong>${t("guide_title")}</strong>
-        <button type="button" class="speak-btn" data-act="speak-text" data-key="owner_welcome" aria-label="${t("speak")}">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
-            <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </button>
+        ${speakPairHtml(`data-act="speak-text" data-key="owner_welcome"`)}
       </div>
       <p class="setup-lead">${t("setup_lead")}</p>
       <div class="row-btns">
@@ -379,16 +370,28 @@ function ownerHasLoginKey() {
   return (getState().owner?.drivers || []).some((d) => d.login_key);
 }
 
-function speakBtn(id) {
+function speakPairHtml(speakAttrs) {
   return `
-    <button type="button" class="speak-btn" data-act="speak" data-id="${id}" aria-label="${t("speak")}">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
-        <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-    </button>
+    <div class="speak-pair">
+      <button type="button" class="speak-btn" ${speakAttrs} aria-label="${t("speak")}">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+          <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button type="button" class="speak-btn pause-btn" data-act="speak-pause" aria-label="${t("pause")}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="5" width="4" height="14" rx="1"/>
+          <rect x="14" y="5" width="4" height="14" rx="1"/>
+        </svg>
+      </button>
+    </div>
   `;
+}
+
+function speakBtn(id) {
+  return speakPairHtml(`data-act="speak" data-id="${id}"`);
 }
 
 function speakName(text) {
@@ -809,7 +812,7 @@ function renderOwner(range) {
         <a class="kpi ${s.broke ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/toot/${path}" data-act="hash" data-go="#/owner/loss/toot/${path}">
           <b>${s.broke || 0}</b><span>${t("jars_broke")}</span>
         </a>
-        <a class="kpi ${gineBad ? "kpi-warn" : ""} kpi-link" href="#/owner/loss/${path}">
+        <a class="kpi ${gineBad ? "kpi-warn" : ""} kpi-link" href="#/owner/return/${path}" data-act="hash" data-go="#/owner/return/${path}">
           <b>${s.counted || 0}<small> / ${s.expectTotal || 0}</small></b><span>${t("counted_need")}</span>
         </a>
       </div>
@@ -957,6 +960,53 @@ function renderOwnerUdhari(range) {
       ${udhariByDriverHtml(path, s.owedByDriver || [])}
     </main>
     ${ownerNav(range, "pending")}
+  `;
+}
+
+function renderOwnerReturn(range) {
+  const s = ownerPeriodStats();
+  const path = periodPath(range);
+  const groups = ownerPlantReturnByDriver();
+  const rows = groups.length
+    ? groups.map((g) => `
+        <section class="udhari-group">
+          <a class="udhari-driver" href="#/owner/driver/${g.id}/${path}">
+            <div class="avatar" style="background:#0e7490">${(g.name || "?").slice(0, 1)}</div>
+            <div style="flex:1;min-width:0">
+              <h3>${g.name}</h3>
+              <p>${t("plant_return_gap", { a: g.counted, b: g.expectTotal })}</p>
+            </div>
+            <div class="pending-box hot" style="margin:0">
+              <b>${g.counted}<small>/${g.expectTotal}</small></b>
+              <span>${t("counted_need")}</span>
+            </div>
+          </a>
+          ${g.days.map((p) => `
+            <div class="list-item owner-cust udhari-cust">
+              <div>
+                <strong>${billDate(p.date)}</strong>
+                <div class="muted">${t("took_gave", { a: p.filledOut, b: p.jars })}</div>
+              </div>
+              <div class="muted" style="text-align:right;font-weight:800">
+                ${t("plant_return_gap", { a: p.counted || 0, b: p.expectTotal || 0 })}
+              </div>
+            </div>
+          `).join("")}
+        </section>
+      `).join("")
+    : `<div class="empty">${t("plant_return_ok")}</div>`;
+  app.innerHTML = `
+    ${header({ subtitle: t("counted_need") + " · " + range.label, date: range.to, showTimer: false })}
+    <main class="wrap">
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
+      ${ownerPeriodTabs("#/owner/return", range)}
+      <div class="kpi accent-kpi ${s.returnMismatch ? "kpi-warn" : ""}" style="display:block">
+        <b>${s.counted || 0}<small> / ${s.expectTotal || 0}</small></b>
+        <span>${t("counted_need")}</span>
+      </div>
+      ${rows}
+    </main>
+    ${ownerNav(range)}
   `;
 }
 
@@ -1716,6 +1766,7 @@ async function render(opts = {}) {
     else if (r.view === "owner-bill") renderOwnerBill(r.customerId, range);
     else if (r.view === "owner-pending") renderOwnerUdhari(range);
     else if (r.view === "owner-extra") renderOwnerExtra(range);
+    else if (r.view === "owner-return") renderOwnerReturn(range);
     else if (r.view === "owner-loss") renderOwnerLoss(range, r.kind);
     else if (r.view === "owner-sheet") renderOwnerSheet(range);
     else renderOwner(range);
@@ -1912,6 +1963,15 @@ document.addEventListener("click", (ev) => {
     ev.stopPropagation();
     const c = getCustomer(id);
     if (c?.name) speakName(c.name);
+    return;
+  }
+  if (act === "speak-pause") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    if (synth.speaking && !synth.paused) synth.pause();
+    else if (synth.paused) synth.resume();
     return;
   }
   if (act === "speak-text") {
