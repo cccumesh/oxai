@@ -1,7 +1,7 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js?v=66";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=66";
-import { t, dateLocale } from "./i18n.js?v=66";
+import * as db from "./db.js?v=67";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=67";
+import { t, dateLocale } from "./i18n.js?v=67";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -75,6 +75,7 @@ const state = {
     rangeDeliveries: [],
     rangeTrips: [],
     allJarRows: [],
+    completeDeliveries: [],
     payments: [],
   },
   trips: {},
@@ -278,13 +279,14 @@ function mapPayment(p) {
 
 export async function loadOwnerRange(fromDate, toDate) {
   const oid = orgId();
-  const [drivers, customers, deliveries, trips, jarRows, payments] = await Promise.all([
+  const [drivers, customers, deliveries, trips, jarRows, payments, completeRows] = await Promise.all([
     db.listDrivers(oid),
     db.listCustomers(null, { all: true, orgId: oid }),
     db.listDeliveriesRange(fromDate, toDate, { orgId: oid }),
     db.listTripsRange(fromDate, toDate, null, oid),
     db.listDeliveryJarRows(oid).catch(() => []),
     db.listPayments(oid).catch(() => []),
+    db.listCompleteDeliveries(oid).catch(() => []),
   ]);
   state.owner.drivers = drivers || [];
   state.owner.customers = (customers || []).map(mapCustomer);
@@ -292,6 +294,23 @@ export async function loadOwnerRange(fromDate, toDate) {
   state.owner.rangeTrips = trips || [];
   state.owner.allJarRows = jarRows || [];
   state.owner.payments = (payments || []).map(mapPayment);
+  state.owner.completeDeliveries = completeRows || [];
+  syncPendingFromLedger();
+}
+
+/** Fix wrong DB pending (silent negatives used to drag plant total down). */
+function syncPendingFromLedger() {
+  const byCust = {};
+  for (const r of state.owner.completeDeliveries || []) {
+    if (!r.customer_id) continue;
+    (byCust[r.customer_id] || (byCust[r.customer_id] = [])).push(r);
+  }
+  for (const c of state.owner.customers || []) {
+    const { pending } = db.runJarLedger(byCust[c.id] || []);
+    if (pending === (c.pendingJars || 0)) continue;
+    c.pendingJars = pending;
+    db.updateCustomerRow(c.id, { pending_jars: pending }).catch(() => {});
+  }
 }
 
 export async function addPayment(customerId, { amount, forMonth, paidOn, note }) {
@@ -566,14 +585,8 @@ function queuePersistEntry(dateStr, customerId, afterSave) {
   }, afterSave ? 60 : 280);
 }
 
-function applyLocalPending(customerId, given, picked, sign) {
-  const c = getCustomer(customerId);
-  if (!c) return;
-  c.pendingJars = Math.max(0, (c.pendingJars || 0) + sign * ((given || 0) - (picked || 0)));
-}
-
 async function refreshPendingAndWapas(dateStr, customerId) {
-  const pending = await db.recomputePending(customerId);
+  const pending = Math.max(0, await db.recomputePending(customerId));
   const c = getCustomer(customerId);
   if (c) c.pendingJars = pending;
   await syncWapasFromStock(dateStr);
@@ -661,7 +674,7 @@ function mapCustomer(c) {
     usualJars: c.usual_jars,
     place: c.place || "",
     routeOrder: c.sequence,
-    pendingJars: c.pending_jars || 0,
+    pendingJars: Math.max(0, c.pending_jars || 0),
     jarRate: Number(c.jar_rate) || 0,
     active: c.active,
   };
@@ -870,10 +883,12 @@ export function fillUsual(dateStr, customerId) {
 export function markComplete(dateStr, customerId) {
   if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
+  const c = getCustomer(customerId);
   if (!e || e.status === "complete") return;
   e.status = "complete";
   e.completedAt = Date.now();
-  applyLocalPending(customerId, e.jarsGiven, e.emptyCollected, 1);
+  e._pendingBefore = Math.max(0, c?.pendingJars || 0);
+  if (c) c.pendingJars = stopMarketPreview(c, e).after;
   syncWapasLocal(dateStr);
   queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
 }
@@ -881,8 +896,10 @@ export function markComplete(dateStr, customerId) {
 export function markPending(dateStr, customerId) {
   if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
+  const c = getCustomer(customerId);
   if (!e || e.status !== "complete") return;
-  applyLocalPending(customerId, e.jarsGiven, e.emptyCollected, -1);
+  if (c && e._pendingBefore != null) c.pendingJars = Math.max(0, e._pendingBefore);
+  delete e._pendingBefore;
   e.status = "pending";
   e.completedAt = null;
   queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
@@ -976,7 +993,7 @@ export function dayStats(dateStr) {
     pending: entries.filter((e) => e.status !== "complete").length,
     jars: complete.reduce((s, e) => s + (e.jarsGiven || 0), 0),
     empty: complete.reduce((s, e) => s + (e.emptyCollected || 0), 0),
-    marketPending: state.customers.reduce((s, c) => s + (c.pendingJars || 0), 0),
+    marketPending: state.customers.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
   };
 }
 
@@ -1115,7 +1132,7 @@ function sumField(rows, field) {
 export function ownerPeriodStats() {
   const deliveries = (state.owner.rangeDeliveries || []).filter((r) => r.status === "complete");
   const trips = state.owner.rangeTrips || [];
-  const pendingMarket = state.owner.customers.reduce((s, c) => s + (c.pendingJars || 0), 0);
+  const pendingMarket = state.owner.customers.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0);
   const byDriver = state.owner.drivers.map((d) => {
     const rows = deliveries.filter((r) => r.device_id === d.id);
     const dTrips = trips.filter((t) => t.device_id === d.id);
@@ -1131,7 +1148,7 @@ export function ownerPeriodStats() {
       leak: sumField(dTrips, "leak_jars"),
       broke: sumField(dTrips, "broke_jars"),
       rokda: sumField(dTrips, "rokda_jars"),
-      pending: cust.reduce((s, c) => s + (c.pendingJars || 0), 0),
+      pending: cust.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
       stops: rows.length,
       ...plantReturnSummary(plantByDate(dTrips, rows)),
     };
@@ -1167,13 +1184,13 @@ export function ownerPeriodStats() {
 
 export function ownerUdhariByDriver() {
   const drivers = state.owner.drivers || [];
-  const owed = (state.owner.customers || []).filter((c) => (c.pendingJars || 0) > 0);
+  const owed = (state.owner.customers || []).filter((c) => Math.max(0, c.pendingJars || 0) > 0);
   const groups = drivers.map((d) => {
     const list = owed.filter((c) => c.device_id === d.id).sort((a, b) => b.pendingJars - a.pendingJars);
     return {
       id: d.id,
       name: d.name,
-      total: list.reduce((s, c) => s + (c.pendingJars || 0), 0),
+      total: list.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
       customers: list,
     };
   }).filter((g) => g.total > 0)
@@ -1184,11 +1201,50 @@ export function ownerUdhariByDriver() {
     groups.push({
       id: "other",
       name: "Aur customers",
-      total: leftover.reduce((s, c) => s + (c.pendingJars || 0), 0),
+      total: leftover.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
       customers: leftover,
     });
   }
   return groups;
+}
+
+/** Extra empties: uthe > (shop pe the + aaj diye). Click detail ke liye. */
+export function ownerExtraJars() {
+  const byCust = {};
+  for (const r of state.owner.completeDeliveries || []) {
+    if (!r.customer_id) continue;
+    (byCust[r.customer_id] || (byCust[r.customer_id] = [])).push(r);
+  }
+  const drivers = Object.fromEntries((state.owner.drivers || []).map((d) => [d.id, d.name]));
+  const rows = [];
+  let total = 0;
+  for (const [customerId, list] of Object.entries(byCust)) {
+    const { extras } = db.runJarLedger(list);
+    const c = (state.owner.customers || []).find((x) => x.id === customerId);
+    for (const e of extras) {
+      total += e.extra;
+      rows.push({
+        ...e,
+        customerName: c?.name || "—",
+        place: c?.place || "",
+        driverName: drivers[e.device_id] || drivers[c?.device_id] || "—",
+      });
+    }
+  }
+  rows.sort((a, b) => String(b.work_date).localeCompare(String(a.work_date)));
+  return { total, rows };
+}
+
+/** Delivery card: market after + extra if khali > shop+diye */
+export function stopMarketPreview(customer, entry) {
+  const open = Math.max(0, customer?.pendingJars || 0);
+  const given = Number(entry?.jarsGiven) || 0;
+  const empty = Number(entry?.emptyCollected) || 0;
+  const available = open + given;
+  if (empty <= available) {
+    return { after: available - empty, extra: 0 };
+  }
+  return { after: 0, extra: empty - available };
 }
 
 export function ownerLossByDriver() {

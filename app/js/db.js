@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
-import { getSession } from "./auth.js?v=66";
-import { t, serverMsg } from "./i18n.js?v=66";
+import { getSession } from "./auth.js?v=67";
+import { t, serverMsg } from "./i18n.js?v=67";
 
 let client = null;
 let authToken = "";
@@ -336,17 +336,68 @@ export async function deliveryDates(deviceId) {
   return [...new Set((rows || []).map((r) => r.work_date))].sort().reverse();
 }
 
+export async function listCompleteDeliveries(orgId) {
+  let q = getClient()
+    .from("sa_deliveries")
+    .select("customer_id, device_id, work_date, jars_given, empty_collected, completed_at, status")
+    .eq("status", "complete")
+    .order("work_date", { ascending: true })
+    .order("completed_at", { ascending: true })
+    .limit(20000);
+  if (orgId) q = q.eq("org_id", orgId);
+  return ok(await q);
+}
+
 export async function recomputePending(customerId) {
   const rows = ok(
     await getClient()
       .from("sa_deliveries")
-      .select("jars_given, empty_collected")
+      .select("jars_given, empty_collected, work_date, completed_at, status")
       .eq("customer_id", customerId)
       .eq("status", "complete")
+      .order("work_date", { ascending: true })
+      .order("completed_at", { ascending: true })
   );
-  const pending = (rows || []).reduce((s, r) => s + (r.jars_given || 0) - (r.empty_collected || 0), 0);
+  const { pending } = runJarLedger(rows || []);
   await updateCustomerRow(customerId, { pending_jars: pending });
   return pending;
+}
+
+/** Running shop ledger: pending never negative; surplus empties = extra. */
+export function runJarLedger(rows) {
+  let pending = 0;
+  const extras = [];
+  const list = [...(rows || [])].sort((a, b) => {
+    const d = String(a.work_date || "").localeCompare(String(b.work_date || ""));
+    if (d) return d;
+    return String(a.completed_at || "").localeCompare(String(b.completed_at || ""));
+  });
+  for (const r of list) {
+    if (r.status && r.status !== "complete") continue;
+    const given = Number(r.jars_given) || 0;
+    const empty = Number(r.empty_collected) || 0;
+    const before = pending;
+    const available = before + given;
+    let extra = 0;
+    if (empty <= available) {
+      pending = available - empty;
+    } else {
+      extra = empty - available;
+      pending = 0;
+    }
+    if (extra > 0) {
+      extras.push({
+        customer_id: r.customer_id,
+        device_id: r.device_id,
+        work_date: r.work_date,
+        jars_given: given,
+        empty_collected: empty,
+        pending_before: before,
+        extra,
+      });
+    }
+  }
+  return { pending: Math.max(0, pending), extras };
 }
 
 export async function fetchTrip(deviceId, date) {

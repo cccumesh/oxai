@@ -1,7 +1,7 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=66";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=66";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=66";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=67";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=67";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=67";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -14,8 +14,9 @@ import {
   ownerCustomerPeriodJars, ownerCustomerMoney, monthLabel, addPayment, removePayment,
   isMonthRegister, ownerDriverRegister, getFirmName,
   signupOwner, loginOwner, loginDriverAccount, addDriverAccount, ensureDriverKey, logout,
-} from "./store.js?v=66";
-import { maybeStartTour, openTour } from "./help.js?v=66";
+  ownerExtraJars, stopMarketPreview,
+} from "./store.js?v=67";
+import { maybeStartTour, openTour } from "./help.js?v=67";
 
 const app = document.getElementById("app");
 let tick = null;
@@ -120,6 +121,9 @@ function parseHash() {
     }
     if (parts[1] === "udhari" || parts[1] === "pending") {
       return { view: "owner-pending", period: parts[2] || "today", month: parts[3] || "" };
+    }
+    if (parts[1] === "extra") {
+      return { view: "owner-extra", period: parts[2] || "today", month: parts[3] || "" };
     }
     if (parts[1] === "loss") {
       const kind = parts[2] === "cap" || parts[2] === "toot" ? parts[2] : "all";
@@ -330,9 +334,6 @@ function renderSignup() {
   `);
 }
 
-function afterPreview(c, e) {
-  return (c.pendingJars || 0) + (e.jarsGiven || 0) - (e.emptyCollected || 0);
-}
 
 function guideNote(key, vars) {
   return `
@@ -410,7 +411,7 @@ function customerCard(date, id, complete) {
   const c = getCustomer(id);
   const e = getDay(date).entries[id];
   if (!c || !e) return "";
-  const next = afterPreview(c, e);
+  const prev = stopMarketPreview(c, e);
   if (complete) {
     const when = e.completedAt ? new Date(e.completedAt).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }) : "";
     return `
@@ -472,7 +473,8 @@ function customerCard(date, id, complete) {
           </div>
         </div>
       </div>
-      <p class="preview">${t("after_market")}: <b>${next}</b> ${t("jar")}</p>
+      <p class="preview">${t("after_market_n", { n: prev.after })}</p>
+      ${prev.extra > 0 ? `<div class="extra-note">${t("extra_preview", { n: prev.extra })}</div>` : ""}
       <button class="done-btn" data-act="done" data-id="${id}">${t("del_done")}</button>
     </article>
   `;
@@ -815,6 +817,13 @@ function renderOwner(range) {
       <a class="kpi accent-kpi" href="#/owner/pending/${path}" style="display:block">
         <b>${s.pendingMarket}</b><span>${t("at_shops")}</span>
       </a>
+      ${(() => {
+        const x = ownerExtraJars();
+        if (!x.total) return "";
+        return `<a class="kpi extra-kpi" href="#/owner/extra/${path}" style="display:block">
+          <b>${x.total}</b><span>${t("extra_jars")}</span>
+        </a>`;
+      })()}
   `;
   app.innerHTML = `
     ${header({ subtitle: t("plant_dash") + " · " + range.label, date: range.to, showTimer: false })}
@@ -908,6 +917,32 @@ function udhariByDriverHtml(path, groups, opts = {}) {
       </section>
     `;
   }).join("");
+}
+
+function renderOwnerExtra(range) {
+  const path = periodPath(range);
+  const x = ownerExtraJars();
+  const rows = x.rows.length
+    ? x.rows.map((r) => `
+        <div class="extra-row">
+          <strong>${r.customerName}</strong>
+          ${r.place ? `<div class="muted">${r.place}</div>` : ""}
+          <div class="muted">${r.work_date} · ${r.driverName}</div>
+          <div class="extra-amt">${t("extra_row", { n: r.extra })} · ${t("given")} ${r.jars_given} / ${t("picked")} ${r.empty_collected}</div>
+        </div>
+      `).join("")
+    : `<div class="empty">${t("extra_none")}</div>`;
+  app.innerHTML = `
+    ${header({ subtitle: t("extra_jars") + " · " + range.label, date: range.to, showTimer: false })}
+    <main class="wrap">
+      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
+      ${ownerPeriodTabs("#/owner/extra", range)}
+      <div class="kpi extra-kpi" style="margin-bottom:12px"><b>${x.total}</b><span>${t("extra_jars")}</span></div>
+      <p class="muted" style="margin:0 0 12px;font-size:13px">${t("extra_jars_sub")}</p>
+      ${rows}
+    </main>
+    ${ownerNav(range)}
+  `;
 }
 
 function renderOwnerUdhari(range) {
@@ -1680,6 +1715,7 @@ async function render(opts = {}) {
     if (r.view === "owner-driver") renderOwnerDriver(r.driverId, range);
     else if (r.view === "owner-bill") renderOwnerBill(r.customerId, range);
     else if (r.view === "owner-pending") renderOwnerUdhari(range);
+    else if (r.view === "owner-extra") renderOwnerExtra(range);
     else if (r.view === "owner-loss") renderOwnerLoss(range, r.kind);
     else if (r.view === "owner-sheet") renderOwnerSheet(range);
     else renderOwner(range);
