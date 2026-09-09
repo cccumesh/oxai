@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
-import { getSession } from "./auth.js?v=64";
-import { t, serverMsg } from "./i18n.js?v=64";
+import { getSession } from "./auth.js?v=66";
+import { t, serverMsg } from "./i18n.js?v=66";
 
 let client = null;
 let authToken = "";
@@ -105,11 +105,12 @@ export async function usernameTaken(username) {
   return Boolean(await rpc("sa_username_taken", { p_username: username }));
 }
 
-export async function signupOrg(username, firmName, password) {
+export async function signupOrg(username, firmName, password, inviteKey) {
   const row = await rpc("sa_signup_org", {
     p_username: username,
     p_firm: firmName,
     p_password: password,
+    p_invite: inviteKey,
   });
   if (!row?.session_token) {
     throw new Error(t("err_sql"));

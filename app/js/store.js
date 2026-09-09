@@ -1,7 +1,7 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js?v=64";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=64";
-import { t, dateLocale } from "./i18n.js?v=64";
+import * as db from "./db.js?v=66";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=66";
+import { t, dateLocale } from "./i18n.js?v=66";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -667,8 +667,8 @@ function mapCustomer(c) {
   };
 }
 
-export async function signupOwner({ username, firmName, password }) {
-  const org = await db.signupOrg(normalizeUsername(username), firmName, password);
+export async function signupOwner({ username, firmName, password, inviteKey }) {
+  const org = await db.signupOrg(normalizeUsername(username), firmName, password, inviteKey);
   db.useAuthToken(org.session_token);
   let device = await db.listOwnerDevice(org.org_id);
   if (!device) {

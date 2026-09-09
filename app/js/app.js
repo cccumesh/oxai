@@ -1,7 +1,7 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=64";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=64";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=64";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=66";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=66";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=66";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -14,8 +14,8 @@ import {
   ownerCustomerPeriodJars, ownerCustomerMoney, monthLabel, addPayment, removePayment,
   isMonthRegister, ownerDriverRegister, getFirmName,
   signupOwner, loginOwner, loginDriverAccount, addDriverAccount, ensureDriverKey, logout,
-} from "./store.js?v=64";
-import { maybeStartTour, openTour } from "./help.js?v=64";
+} from "./store.js?v=66";
+import { maybeStartTour, openTour } from "./help.js?v=66";
 
 const app = document.getElementById("app");
 let tick = null;
@@ -310,6 +310,10 @@ function renderSignup() {
       <h2>${t("new_company")}</h2>
       <p class="muted">${t("signup_hint")}</p>
       <form data-form="signup">
+        <div class="field">
+          <label>${t("invite_key")}</label>
+          <input name="invite" required minlength="6" autocomplete="off" placeholder="AJ-7K2M-9P4Q" style="text-transform:uppercase;letter-spacing:0.06em" />
+        </div>
         <div class="field">
           <label>${t("username")}</label>
           <input name="username" required minlength="3" autocomplete="off" placeholder="sanjayaqua" data-act="user-check" />
@@ -2053,7 +2057,12 @@ document.addEventListener("submit", (ev) => {
       const pass = String(fd.get("password") || "");
       const confirm = String(fd.get("confirm") || "");
       if (pass !== confirm) throw new Error(t("pass_bad"));
-      await signupOwner({ username: fd.get("username"), firmName: fd.get("firm"), password: pass });
+      await signupOwner({
+        username: fd.get("username"),
+        firmName: fd.get("firm"),
+        password: pass,
+        inviteKey: fd.get("invite"),
+      });
       location.hash = "#/owner";
       await render();
     });

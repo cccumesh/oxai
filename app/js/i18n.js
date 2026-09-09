@@ -18,7 +18,7 @@ const rows = {
   start_title: L("Shuru karo", "शुरू करो", "Welcome", "શરૂ કરો", "सुरू करा"),
   start_hint: L("Pehle yeh chuno.", "पहले ये चुनो।", "Choose how you want to continue.", "પહેલા આ પસંદ કરો.", "आधी हे निवडा."),
   new_account: L("Naya account", "नया अकाउंट", "Create account", "નવું અકાઉન્ટ", "नवे अकाउंट"),
-  new_account_sub: L("Plant ka naya hisaab banana hai", "प्लांट का नया हिसाब बनाना है", "Set up a new plant workspace", "પ્લાન્ટનો નવો હિસાબ બનાવવો છે", "प्लांटचा नवा हिसाब बनवायचा आहे"),
+  new_account_sub: L("Plant ka naya hisaab — invite key chahiye", "प्लांट का नया हिसाब — इनवाइट की चाहिए", "New plant — invite key required", "પ્લાન્ટનો નવો હિસાબ — ઇન્વાઈટ કી જોઈએ", "प्लांटचा नवा हिसाब — इन्व्हाइट की हवी"),
   have_account: L("Pehle se account hai", "पहले से अकाउंट है", "I already have an account", "પહેલેથી અકાઉન્ટ છે", "आधीपासून अकाउंट आहे"),
   have_account_sub: L("Plant ya Delivery man login", "प्लांट या डिलीवरी मैन लॉगिन", "Sign in as plant or delivery man", "પ્લાન્ટ કે ડિલિવરી મેન લોગિન", "प्लांट किंवा डिलिव्हरी मॅन लॉगिन"),
   back: L("← Peeche", "← पीछे", "← Back", "← પાછળ", "← मागे"),
@@ -40,7 +40,10 @@ const rows = {
   new_company_q: L("Nayi company?", "नयी कंपनी?", "New company?", "નવી કંપની?", "नवी कंपनी?"),
   create_account: L("Account banao", "अकाउंट बनाओ", "Create account", "અકાઉન્ટ બનાવો", "अकाउंट तयार करा"),
   new_company: L("Nayi company", "नयी कंपनी", "New company", "નવી કંપની", "नवी कंपनी"),
-  signup_hint: L("Username unique hoga. Bill pe jo firm ka naam chhapna hai, woh likho.", "यूजरनेम यूनिक होगा। बिल पे जो फर्म का नाम छपना है, वो लिखो।", "Username must be unique. Use the trading name that appears on invoices.", "યુઝરનેમ યુનિક હશે. બિલ પર જે ફર્મનું નામ છપાય તે લખો.", "युजरनेम युनिक असेल. बिलवर जे फर्मचे नाव छापायचे ते लिहा."),
+  signup_hint: L("Pehle invite key likho (jo hum denge). Username unique hoga. Bill pe firm ka naam.", "पहले इनवाइट की लिखो (जो हम देंगे)। यूजरनेम यूनिक होगा। बिल पे फर्म का नाम।", "Enter the invite key we gave you. Username must be unique. Firm name appears on invoices.", "પહેલા ઇન્વાઈટ કી લખો. યુઝરનેમ યુનિક. બિલ પર ફર્મનું નામ.", "आधी इन्व्हाइट की लिहा. युजरनेम युनिक. बिलवर फर्मचे नाव."),
+  invite_key: L("Invite key", "इनवाइट की", "Invite key", "ઇન્વાઈટ કી", "इन्व्हाइट की"),
+  err_invite: L("Invite key likho.", "इनवाइट की लिखो।", "Enter the invite key.", "ઇન્વાઈટ કી લખો.", "इन्व्हाइट की लिहा."),
+  err_invite_bad: L("Invite key galat hai, ya pehle use ho chuki.", "इनवाइट की गलत है, या पहले यूज़ हो चुकी।", "Invite key is wrong or already used.", "ઇન્વાઈટ કી ખોટી છે, કે વપરાઈ ગઈ.", "इन्व्हाइट की चुकीची आहे, किंवा वापरली गेली."),
   firm_name: L("Firm ka naam", "फर्म का नाम", "Company name", "ફર્મનું નામ", "फर्मचे नाव"),
   have_account_q: L("Pehle se account hai?", "पहले से अकाउंट है?", "Already registered?", "પહેલેથી અકાઉન્ટ છે?", "आधीपासून अकाउंट आहे?"),
   brand_tag: L("20 litre delivery · har plant ka apna hisaab", "20 लीटर डिलीवरी · हर प्लांट का अपना हिसाब", "20-litre jar delivery. One ledger per plant.", "20 લિટર ડિલિવરી · દરેક પ્લાન્ટનો પોતાનો હિસાબ", "20 लिटर डिलिव्हरी · प्रत्येक प्लांटचा स्वतःचा हिसाब"),
@@ -466,6 +469,8 @@ export function serverMsg(raw) {
     "Company username ya key galat": "err_key",
     "Session khatam": "err_send",
     "Device galat": "err_dgalat",
+    "Invite key likho": "err_invite",
+    "Invite key galat ya use ho chuki": "err_invite_bad",
   };
   if (map[m]) return t(map[m]);
   return m;
