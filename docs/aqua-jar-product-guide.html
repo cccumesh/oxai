@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Aqua Jar — Complete Product Guide</title>
+  <style>
+    :root { --deep:#043047; --teal:#0e7490; --ink:#0f172a; --muted:#475569; --line:#d8e6ec; --ice:#f0f9fb; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: var(--ink);
+      font: 11pt/1.45 "Segoe UI", "Noto Sans", Arial, sans-serif;
+    }
+    .cover {
+      min-height: 100vh; padding: 56px 48px 40px;
+      background: linear-gradient(165deg, #043047 0%, #0e7490 70%, #155e75 100%);
+      color: white; page-break-after: always;
+    }
+    .cover h1 { font-size: 42pt; margin: 80px 0 8px; letter-spacing: -0.03em; }
+    .cover .sub { font-size: 16pt; opacity: 0.9; margin: 0 0 28px; }
+    .cover p { max-width: 38em; opacity: 0.92; }
+    .chip {
+      display: inline-block; border: 1px solid rgba(255,255,255,.35);
+      border-radius: 999px; padding: 6px 12px; margin: 0 6px 8px 0; font-size: 9.5pt; font-weight: 700;
+    }
+    .meta { margin-top: 48px; font-size: 10pt; opacity: 0.8; }
+    main { padding: 36px 48px 48px; }
+    h2 { color: var(--deep); font-size: 18pt; margin: 1.4em 0 0.4em; page-break-after: avoid; border-bottom: 2px solid #67e8f9; padding-bottom: 6px; }
+    h3 { color: var(--teal); font-size: 13pt; margin: 1.2em 0 0.35em; page-break-after: avoid; }
+    h4 { margin: 0.9em 0 0.3em; color: var(--deep); font-size: 11.5pt; }
+    p, li { color: #1e293b; }
+    .lead { font-size: 12pt; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 10pt; page-break-inside: avoid; }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: var(--ice); color: var(--deep); }
+    code, .ui {
+      font-family: "Segoe UI", Arial, sans-serif; font-weight: 700;
+      background: var(--ice); color: var(--deep); padding: 1px 6px; border-radius: 4px;
+      border: 1px solid #cfe8ef; white-space: nowrap;
+    }
+    .box { background: var(--ice); border: 1px solid #a5f3fc; border-radius: 10px; padding: 12px 14px; margin: 10px 0 16px; }
+    .warn { background: #fff7ed; border-color: #fdba74; }
+    .flow { background: #f8fafc; border-left: 4px solid var(--teal); padding: 10px 14px; margin: 10px 0 16px; }
+    ol.flow-ol, ul { margin: 6px 0 12px; padding-left: 1.3em; }
+    .toc a { color: var(--teal); text-decoration: none; }
+    .toc li { margin: 4px 0; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media print {
+      .cover { min-height: 100vh; }
+      a { color: inherit; text-decoration: none; }
+    }
+    footer.note { font-size: 9pt; color: var(--muted); margin-top: 28px; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="chip">20 litre jar delivery</div>
+    <div class="chip">Plant + Delivery man</div>
+    <div class="chip">5 languages</div>
+    <div class="chip">Live ledger</div>
+    <h1>Aqua Jar</h1>
+    <p class="sub">Complete product guide — every screen, every button, every flow</p>
+    <p>
+      Aqua Jar is a phone-first accounts app for packaged drinking-water plants that deliver
+      <strong>20-litre jars</strong> to shops. It replaces the paper register: the delivery phone
+      taps numbers on the route; the plant dashboard sees the same numbers live; bills and a
+      statement come out of those numbers.
+    </p>
+    <p>
+      This document is for anyone who needs the full picture — product, operations, and UI —
+      including an AI assistant reviewing the project. Button names below are the <em>actual
+      in-app labels</em> (default language: Hindi written in Roman letters, e.g. <span class="ui">Key banao</span>).
+    </p>
+    <div class="meta">
+      Product: Aqua Jar · Delivery<br />
+      Audience: plant owner and delivery staff<br />
+      Stack: browser app (HTML/CSS/JS) + Supabase<br />
+      Document date: 9 September 2026
+    </div>
+  </section>
+
+  <main>
+    <h2>1. What this app is</h2>
+    <p class="lead">
+      One plant = one company account. One or more delivery people, each with a phone.
+      Every filled jar that leaves the plant, every jar given to a shop, every empty collected,
+      every leak, every broken jar, and every rupee of udhari is one shared ledger.
+    </p>
+    <div class="box">
+      <strong>Simple by design.</strong> Almost no typing on the route. Plus and minus.
+      Two numbers per shop: how many filled jars given (<span class="ui">Diye</span>) and how many
+      empties collected (<span class="ui">Khali uthe</span>). Then <span class="ui">Delivery pura ✓</span>.
+      Plant side is mostly reading numbers and tapping a customer to open a bill.
+    </div>
+    <div class="box">
+      <strong>Universal by design.</strong> Not built only for one named shop in Jalgaon.
+      Any 20L jar plant can sign up: unique username, firm name on the invoice, own delivery staff,
+      own shops, own rates. Five languages: Hindi (Roman), हिंदी, English, ગુજરાતી, मराठी.
+      Works in the phone browser; login stays on that phone until <span class="ui">Logout</span>.
+    </div>
+
+    <h3>1.1 Two roles (never mixed)</h3>
+    <table>
+      <tr><th>Role</th><th>Who</th><th>Login</th><th>Job</th></tr>
+      <tr>
+        <td><strong>Plant</strong></td>
+        <td>Owner / office</td>
+        <td>Username + password</td>
+        <td>See live hisaab, keys, bills, market jars, udhari, sheet</td>
+      </tr>
+      <tr>
+        <td><strong>Delivery man</strong></td>
+        <td>Person on the vehicle (hired or the owner on a second phone)</td>
+        <td>Company username + login key (not the plant password)</td>
+        <td>Load confirm, shop stops, empties, plant return count</td>
+      </tr>
+    </table>
+    <p>A delivery login cannot open the plant dashboard. A plant login cannot run the route until you log out and sign in on the Delivery man tab (or use another phone).</p>
+
+    <h3>1.2 The two things people mix in a notebook — kept separate here</h3>
+    <table>
+      <tr><th>Word in app</th><th>Meaning</th><th>Not the same as</th></tr>
+      <tr><td><span class="ui">Market jar</span> / <span class="ui">Shop pe atke jar</span></td><td>Physical jars still sitting at shops. Empties still to collect.</td><td>Money</td></tr>
+      <tr><td><span class="ui">Udhari</span></td><td>Rupees the shop still owes (jars × rate − payments).</td><td>Jars at the shop</td></tr>
+      <tr><td><span class="ui">Rokda becha</span></td><td>Cash / roadside sale from the vehicle, not a named shop.</td><td>Credit sale to a customer</td></tr>
+      <tr><td><span class="ui">Cap / pani gira</span></td><td>Water leaked; the <em>jar still exists</em> (now empty).</td><td>Broken jar</td></tr>
+      <tr><td><span class="ui">Jar toot</span></td><td>Jar destroyed; it will not come back.</td><td>Leak</td></tr>
+    </table>
+
+    <h2>2. Why plants need this (problems the app actually solves)</h2>
+    <ol>
+      <li>Writing given / empty in a notebook at each shop is slow and error-prone. Phone: + / −.</li>
+      <li>Nobody knows which shop still has how many jars to pick up. App: live market list per shop.</li>
+      <li>Making a monthly bill takes time. App: tap customer → invoice (print or save image).</li>
+      <li>Jars and rupees get mixed in one copy. App: market vs udhari are separate.</li>
+      <li>Plant learns the day’s numbers only when the boy returns. App: live dashboard.</li>
+      <li>Load from plant vs jars given do not match. App: confirm load; counted vs expected at return.</li>
+      <li>Leak and breakage treated as the same loss. App: leak = empty jar exists; toot = jar gone.</li>
+      <li>Route order forgotten. App: sequence (arrows + drag).</li>
+      <li>Month register to total by date. App: month table, diye on top / khali below / dates across.</li>
+      <li>Who paid, who still owes. App: rate, payment, old pending, net udhari, balance sheet.</li>
+      <li>Several delivery men. App: each has a name, key, and own shops.</li>
+      <li>Plant password should not go to the boy. App: username + key only.</li>
+      <li>Yesterday’s figure was wrong. Delivery can edit today + yesterday + 2 days ago only.</li>
+    </ol>
+
+    <h2>3. How simple it is (interaction model)</h2>
+    <ul>
+      <li><strong>Almost no keyboard on the route.</strong> Steppers (− number +). Number can also be typed.</li>
+      <li><strong>Big primary buttons</strong> for the one next action: <span class="ui">Confirm — gadi bhari</span>, <span class="ui">Delivery pura ✓</span>, <span class="ui">Login</span>.</li>
+      <li><strong>Bottom tabs only.</strong> Plant: Dashboard / Mahina / Market / Hisaab. Delivery: Route / Customers / + Naya.</li>
+      <li><strong>One header everywhere:</strong> firm name, Help, Logout, date, Live (plant) or remaining-time chip (delivery today).</li>
+      <li><strong>Speaker</strong> next to shop names and help text — useful when hands are wet or reading is slow.</li>
+      <li><strong>Language picker</strong> on login and in the header. Changing language relabels the whole UI.</li>
+      <li><strong>Help overlay</strong> on first plant login (welcome → fayda → who delivers → key → share → login → where Help is). Reopen anytime.</li>
+      <li><strong>Copy key</strong> shows a 3-second tick. No alert popup.</li>
+    </ul>
+
+    <h2>4. Languages and “universal”</h2>
+    <table>
+      <tr><th>Picker label</th><th>UI language</th></tr>
+      <tr><td>Hindi</td><td>Hinglish / Hindi in Roman letters (default)</td></tr>
+      <tr><td>हिंदी</td><td>Devanagari Hindi</td></tr>
+      <tr><td>English</td><td>English</td></tr>
+      <tr><td>ગુજરાતી</td><td>Gujarati</td></tr>
+      <tr><td>मराठी</td><td>Marathi</td></tr>
+    </table>
+    <p>One plant in Maharashtra, Gujarat, or anywhere with a 20L jar route can use the same app. Firm name on the invoice is whatever they type at signup. Username must be unique across plants. No spaces in username (letters, numbers, dot, underscore).</p>
+    <p><strong>Business day:</strong> midnight to midnight, 24 hours (India). Not a custom shift start.</p>
+
+    <h2>5. Start: first screens (no login yet)</h2>
+    <h3>5.1 Language + Aqua Jar brand</h3>
+    <p>Every auth screen shows the droplet logo, title <strong>Aqua Jar</strong>, tagline <em>20 litre delivery · har plant ka apna hisaab</em>, and the language picker.</p>
+
+    <h3>5.2 Shuru karo (<code>#/start</code>)</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><span class="ui">Naya account</span></td><td>New plant. Goes to signup.</td></tr>
+      <tr><td><span class="ui">Pehle se account hai</span></td><td>Existing plant or delivery man. Goes to login.</td></tr>
+    </table>
+
+    <h3>5.3 Nayi company — signup (<code>#/signup</code>)</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><span class="ui">← Peeche</span></td><td>Back to start.</td></tr>
+      <tr><td>Username</td><td>Min 3 characters. Live check: available / taken + suggestions.</td></tr>
+      <tr><td>Firm ka naam</td><td>Printed on bills and the sheet (e.g. Sanjay Aqua).</td></tr>
+      <tr><td>Password / Password dubara</td><td>Min 6. Must match.</td></tr>
+      <tr><td><span class="ui">Account banao</span></td><td>Creates the plant and signs in as Plant.</td></tr>
+      <tr><td>Link <span class="ui">Login</span></td><td>Already registered.</td></tr>
+    </table>
+
+    <h3>5.4 Login (<code>#/login</code> and <code>#/login/driver</code>)</h3>
+    <p>Two tabs at the top: <span class="ui">Plant</span> | <span class="ui">Delivery man</span>.</p>
+    <h4>Plant tab</h4>
+    <ul>
+      <li>Username, Password, <span class="ui">Login</span></li>
+      <li>Stays signed in on this phone until Logout.</li>
+    </ul>
+    <h4>Delivery man tab</h4>
+    <ul>
+      <li>Company username (the plant’s username, shown on the plant header)</li>
+      <li>Login key (format like ABCD-EFGH, issued by plant)</li>
+      <li><span class="ui">Login</span></li>
+      <li>4 wrong keys → short wait (security lock). Banner shows seconds.</li>
+    </ul>
+    <p>Footer: <span class="ui">Nayi company?</span> → signup.</p>
+
+    <h3>5.5 Rare: database config</h3>
+    <p>If the app has no Supabase URL/key yet: form with Project URL, anon public key, <span class="ui">Save &amp; connect</span>. End users of a published plant app normally never see this.</p>
+
+    <h2>6. Header (after login, every page)</h2>
+    <table>
+      <tr><th>Item</th><th>What it is</th></tr>
+      <tr><td>Droplet + firm name</td><td>Plant trading name. Delivery also sees firm; subtitle is delivery man name + day.</td></tr>
+      <tr><td>Plant extra</td><td>Company username is shown next to the subtitle so it can be read out to the boy.</td></tr>
+      <tr><td>Language mini picker</td><td>Same 5 languages.</td></tr>
+      <tr><td><span class="ui">Help</span></td><td>Opens the illustrated guide overlay (speaker inside).</td></tr>
+      <tr><td><span class="ui">Logout</span></td><td>Clears session; back to start.</td></tr>
+      <tr><td>Date</td><td>e.g. Wed, 9 Sept, 2026. Past delivery days add <span class="ui">pehle ka din</span>.</td></tr>
+      <tr><td><span class="ui">Live</span></td><td>Plant only — dashboard follows delivery in near real time.</td></tr>
+      <tr><td>Timer</td><td>Delivery, today: remaining time in the business day. Past day: <span class="ui">Sudhaar chalega</span> if still in the 3-day window.</td></tr>
+    </table>
+
+    <h2>7. Plant — first login Help overlay</h2>
+    <p>On first dashboard visit a full-screen card sequence appears. Skip = <span class="ui">Baad mein</span>. Next = <span class="ui">Aage</span>. Last = <span class="ui">Samajh gaya</span>. Speaker = <span class="ui">Sunno</span>.</p>
+    <ol>
+      <li><strong>Aqua Jar par aapka swagat hai</strong> — digital, simple, useful.</li>
+      <li><strong>Aapko kya fayda hoga</strong> — problem / solution pairs.</li>
+      <li><strong>Aap khud jar dete ho?</strong> — must choose: self vs hired delivery man. Cannot skip this page without a choice.</li>
+      <li><strong>Naam likho, key banao, copy karo</strong></li>
+      <li>If hired: give key + username shown at top. If self: logout / other phone, Delivery man tab, same username + key.</li>
+      <li>How delivery login looks (Plant | Delivery man tabs).</li>
+      <li>Where Help lives (header, beside customer search, on bill page).</li>
+    </ol>
+    <p>Until a login key exists, KPI boxes stay hidden. A setup card remains: <span class="ui">Guide kholo</span> and <span class="ui">+ Add</span>.</p>
+
+    <h2>8. Plant dashboard (<code>#/owner</code>)</h2>
+    <h3>8.1 Period</h3>
+    <p>Tabs: <span class="ui">Aaj</span> · <span class="ui">Mahina</span> · <span class="ui">Saal</span> · <span class="ui">Sab</span>. Month picker: <span class="ui">Koi mahina chuno (bill / history)</span>.</p>
+
+    <h3>8.2 KPI boxes (after a key exists)</h3>
+    <table>
+      <tr><th>Box</th><th>Meaning</th></tr>
+      <tr><td>Plant se bhare gaye</td><td>Filled jars loaded from plant</td></tr>
+      <tr><td>Diye gaye</td><td>Given on route + rokda</td></tr>
+      <tr><td>Ab gadi mein bhare</td><td>Still on the vehicle</td></tr>
+      <tr><td>Rokda becha</td><td>Cash sold from vehicle</td></tr>
+      <tr><td>Plant pe bhare aaye</td><td>Filled jars returned to plant</td></tr>
+      <tr><td>Shop se khali aaye</td><td>Empties collected from shops</td></tr>
+      <tr><td>Cap khuli / pani gira</td><td>Tap → loss list (cap)</td></tr>
+      <tr><td>Jar toot gaye</td><td>Tap → loss list (broken)</td></tr>
+      <tr><td>Delivery man gine / hone chahiye</td><td>His count vs system expected. Mismatch highlights.</td></tr>
+      <tr><td>Shop pe atke jar</td><td>Tap → Market page. Jars still at shops.</td></tr>
+    </table>
+
+    <h3>8.3 Delivery man section</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><span class="ui">+ Add</span></td><td>Modal: naam, then <span class="ui">Key banao</span>. Hint: share on WhatsApp.</td></tr>
+      <tr><td>Card (name + stats)</td><td>Opens that man’s ledger / month register.</td></tr>
+      <tr><td><span class="ui">Key banao</span></td><td>If no key yet.</td></tr>
+      <tr><td><span class="ui">Copy</span> / <span class="ui">Copy ho gayi</span></td><td>Copies key; tick for 3 seconds.</td></tr>
+    </table>
+    <p>Each card shows loaded, given, cap, toot, market jars stuck, counted / expected.</p>
+    <p>Help note (after setup): how to generate a key and that login uses Delivery man tab + company username + key.</p>
+
+    <h3>8.4 Customers</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td>Search <span class="ui">Naam / place dhoondo</span></td><td>Filter list.</td></tr>
+      <tr><td><span class="ui">Help</span> beside search</td><td>Same guide overlay.</td></tr>
+      <tr><td>Customer row</td><td>Opens that customer’s <strong>bill</strong>.</td></tr>
+      <tr><td><span class="ui">Rate</span></td><td>Edit name, place, ₹ per jar.</td></tr>
+    </table>
+    <p>Row also shows market jars left and udhari / advance in rupees (once rate exists).</p>
+    <p>Bottom CTA: <span class="ui">Balance Sheet</span> → Hisaab page.</p>
+
+    <h3>8.5 Bottom navigation (plant)</h3>
+    <table>
+      <tr><th>Tab</th><th>Goes to</th></tr>
+      <tr><td><span class="ui">Dashboard</span></td><td>This page</td></tr>
+      <tr><td><span class="ui">Mahina</span></td><td>Dashboard in month period (history / bills)</td></tr>
+      <tr><td><span class="ui">Market</span></td><td>Which shops still have jars</td></tr>
+      <tr><td><span class="ui">Hisaab</span></td><td>Plant balance sheet / statement</td></tr>
+    </table>
+
+    <h2>9. Plant — Market (<code>#/owner/pending</code>)</h2>
+    <p>List of shops that still have jars. Grouped by delivery man. Tap a shop → bill. Link to see more shops on the same man. Empty state: no jars left at shops.</p>
+    <p>Back: <span class="ui">← Dashboard</span>. Same period tabs.</p>
+    <div class="box">This page is about <strong>physical jars</strong>, not money.</div>
+
+    <h2>10. Plant — Loss (cap / toot)</h2>
+    <p>Opened from KPI taps. Tabs: <span class="ui">Dono</span> · <span class="ui">Cap / gira</span> · <span class="ui">Toot</span>. Lists which delivery man reported what. Link into that man’s page.</p>
+
+    <h2>11. Plant — one delivery man (<code>#/owner/driver/…</code>)</h2>
+    <p>His KPIs for the period, trip table (dates: loaded, given, cap, toot, rokda, returned, counted vs expected). Month <strong>register</strong>: rows = his shops, columns = dates 1…n; each cell has diye (top) and khali (bottom). Tap shop name → bill. Help text explains that layout.</p>
+
+    <h2>12. Plant — Bill / invoice (<code>#/owner/bill/…</code>)</h2>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><span class="ui">← Dashboard</span></td><td>Back</td></tr>
+      <tr><td><span class="ui">Help</span></td><td>Guide overlay</td></tr>
+      <tr><td>Period tabs + month picker</td><td>Bill for aaj / mahina / saal / sab</td></tr>
+      <tr><td><span class="ui">Customer / rate</span></td><td>Name, place, ₹ per jar</td></tr>
+      <tr><td><span class="ui">Print</span></td><td>Browser print of the invoice</td></tr>
+      <tr><td><span class="ui">Save image</span></td><td>PNG of the invoice (html2canvas)</td></tr>
+    </table>
+    <p>Invoice body: firm name, “Packaged Drinking Water · 20 Litre Jar”, invoice no. <code>SA/YYYYMM/xxxx</code>, bill to / from, line items by date, qty, rate, amount, words, empty jars still at customer, signatures.</p>
+    <p>If rate is missing: banner telling you to set rate first.</p>
+    <h4>Payment box (not printed)</h4>
+    <ul>
+      <li>KPIs: total billed, total received, old pending or advance</li>
+      <li>Amount ₹, month this payment is for, <span class="ui">Payment save</span></li>
+      <li>Each saved row: date, month, rupees, <span class="ui">Hatao</span></li>
+    </ul>
+
+    <h2>13. Plant — Hisaab / Balance sheet (<code>#/owner/sheet</code>)</h2>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td><span class="ui">Print</span> / <span class="ui">Save image</span></td><td>Statement as paper or PNG</td></tr>
+    </table>
+    <p>Shows net udhari, % collected vs billed, assets (customer udhari; cash/bank explicitly <em>not in app</em>), advances, period credit sales, receipts, jar statement (plant out, shop given, rokda, leak, broke, empties, filled back, still at shops), payment list, udhari list, delivery-man-wise given / market / ₹.</p>
+
+    <h2>14. Delivery man — full daily flow</h2>
+    <div class="flow">
+      <ol class="flow-ol">
+        <li>Login: Delivery man tab → company username + key.</li>
+        <li>Add shops if needed: <span class="ui">+ Naya customer</span> (name + optional place). No rate on this phone — plant sets ₹.</li>
+        <li>Enter how many filled jars left the plant. <span class="ui">Confirm — gadi bhari</span>. Until this, the load box stays at the top; after confirm, customers move up.</li>
+        <li>Walk remaining shops. Per shop: Diye, Khali uthe, see “iske baad market mein baki”, then <span class="ui">Delivery pura ✓</span>.</li>
+        <li>Optional: rokda (cash sold), sequence of shops.</li>
+        <li>When all shops are pura: day summary moves up. Fill <span class="ui">Plant par wapas</span>: leak, toot, total jars counted back on the vehicle.</li>
+        <li>If counted ≠ expected, warning to recount. Match = hisaab match.</li>
+      </ol>
+    </div>
+
+    <h3>14.1 Bottom nav (delivery)</h3>
+    <table>
+      <tr><th>Tab</th><th>What</th></tr>
+      <tr><td><span class="ui">Route</span></td><td>Today’s (or selected day’s) work</td></tr>
+      <tr><td><span class="ui">Customers</span></td><td>All his shops + Edit</td></tr>
+      <tr><td><span class="ui">+ Naya</span></td><td>Same as FAB add customer</td></tr>
+    </table>
+    <p>Day switcher: only <strong>3 days</strong> — Aaj, Kal, 2 din pehle. Older days cannot be opened or edited. Plant can still see history; delivery cannot rewrite old dates.</p>
+
+    <h3>14.2 Route page — load box (before confirm)</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td>− / number / + on <span class="ui">Bhare leke gaye</span></td><td>Filled jars taken from plant</td></tr>
+      <tr><td><span class="ui">Confirm — gadi bhari</span></td><td>Locks the load for the day (disabled if 0)</td></tr>
+    </table>
+    <p>After confirm: note <span class="ui">Load confirm · N jar</span>. Stock pairs show given, still on vehicle, leak = empty, etc.</p>
+
+    <h3>14.3 Shop card (not yet pura)</h3>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td>Speaker</td><td>Speaks the shop name</td></tr>
+      <tr><td>▲ ▼</td><td>Move shop up/down in today’s order</td></tr>
+      <tr><td>Big number <span class="ui">Shop pe jar — khali uthana baki</span></td><td>Running market balance for that shop</td></tr>
+      <tr><td>Diye − / +</td><td>Filled jars given today</td></tr>
+      <tr><td>Khali uthe − / +</td><td>Empties collected today</td></tr>
+      <tr><td>Preview <span class="ui">Iske baad market mein baki</span></td><td>What will remain after this stop</td></tr>
+      <tr><td><span class="ui">Delivery pura ✓</span></td><td>Marks stop complete; card moves to Pura list</td></tr>
+    </table>
+
+    <h3>14.4 Shop card (already pura)</h3>
+    <p>Shows Diye / Khali large. <span class="ui">Wapas incomplete</span> undoes complete if still inside the 3-day window. Market leftover still visible.</p>
+
+    <h3>14.5 Rokda</h3>
+    <p>Stepper for jars sold for cash, not to a named customer.</p>
+
+    <h3>14.6 Plant par wapas</h3>
+    <table>
+      <tr><th>Field</th><th>Meaning</th></tr>
+      <tr><td>Pani gira (ab khali)</td><td>Leak; jar comes back empty</td></tr>
+      <tr><td>Jar toot gaya</td><td>Broken; not returned</td></tr>
+      <tr><td>Total jar wapas laye (aap gino)</td><td>Physical count on the vehicle</td></tr>
+    </table>
+    <p>System computes expected total. If your count differs: <em>Aapne A likhe, system kehta hai B hone chahiye.</em></p>
+
+    <h3>14.7 Sequence page</h3>
+    <p><span class="ui">← Route par wapas</span>. Drag rows or ▲ ▼. Speaker on each name. Completed shops marked <span class="ui">Pura</span>.</p>
+
+    <h3>14.8 Customers list (delivery)</h3>
+    <p>Each shop: name, place, jars at shop. <span class="ui">Edit</span> → name/place (no rate). FAB <span class="ui">+ Naya customer</span>.</p>
+
+    <h3>14.9 Delivery Help overlay (first time)</h3>
+    <ol>
+      <li>Your job: give filled, collect empty, mark pura. Plant hisaab is built from you.</li>
+      <li>Add customers first.</li>
+      <li>Confirm load — then customers move up.</li>
+      <li>Three actions at each shop.</li>
+      <li>End of day plant return. Help in header anytime.</li>
+    </ol>
+
+    <h2>15. Modals (popups)</h2>
+    <h4>New / edit customer</h4>
+    <ul>
+      <li>Customer ka naam (required)</li>
+      <li>Place / area (optional)</li>
+      <li>Jar ka rate ₹ — <em>only on plant</em></li>
+      <li><span class="ui">Cancel</span> · <span class="ui">Save</span></li>
+      <li>Edit: extra <span class="ui">Hatao</span> (deactivate shop; confirm)</li>
+    </ul>
+    <h4>Naya Delivery man</h4>
+    <ul>
+      <li>Naam · <span class="ui">Cancel</span> · <span class="ui">Key banao</span></li>
+    </ul>
+    <p>Tap outside the card or Cancel closes. Busy overlay with spinner on network save.</p>
+
+    <h2>16. Rules the software enforces</h2>
+    <table>
+      <tr><th>Rule</th><th>Detail</th></tr>
+      <tr><td>Market ≠ udhari</td><td>Jars at shops never equal rupees due.</td></tr>
+      <tr><td>Leak ≠ toot</td><td>Leak keeps the jar; toot removes it.</td></tr>
+      <tr><td>Load confirm</td><td>Route numbers make sense only after filled-out is confirmed.</td></tr>
+      <tr><td>Stock check</td><td>Given + leak/toot cannot exceed load from plant (warning).</td></tr>
+      <tr><td>3-day delivery edit</td><td>Today, yesterday, 2 days ago. Older blocked in UI and database (RLS).</td></tr>
+      <tr><td>Plant vs delivery login</td><td>Password never used on delivery phone. Key is not the plant password.</td></tr>
+      <tr><td>Username</td><td>Lowercase, no spaces; 3+; unique per plant.</td></tr>
+      <tr><td>Key brute-force</td><td>4 failures → wait.</td></tr>
+      <tr><td>Session</td><td>Cookie/localStorage; one phone stays in until Logout.</td></tr>
+      <tr><td>Rate</td><td>Bills use current rate. Note on sheet: old bills can change if rate is edited (E. &amp; O.E.).</td></tr>
+      <tr><td>Cash in bank</td><td>Not tracked. Sheet says cash/bank is not in the app.</td></tr>
+    </table>
+
+    <h2>17. What is not in the app (on purpose)</h2>
+    <ul>
+      <li>No GPS tracking of the vehicle.</li>
+      <li>No WhatsApp sending from inside the app (you copy the key and send yourself).</li>
+      <li>No GST fields / HSN on the invoice (simple trade invoice for 20L jar).</li>
+      <li>No multi-product SKU (only 20L jar).</li>
+      <li>No staff attendance, salary, or diesel.</li>
+      <li>No customer-facing app for shops.</li>
+    </ul>
+
+    <h2>18. Technical picture (for a reviewer)</h2>
+    <ul>
+      <li><strong>Client:</strong> static files under <code>app/</code> — <code>index.html</code>, <code>css/app.css</code>, ES modules (<code>app.js</code>, <code>store.js</code>, <code>db.js</code>, <code>auth.js</code>, <code>i18n.js</code>, <code>help.js</code>).</li>
+      <li><strong>Local server:</strong> <code>npm run dev</code> → typically <code>http://localhost:5173/</code>.</li>
+      <li><strong>Backend:</strong> Supabase (Postgres + Auth-style org rows + RLS). Tables prefixed <code>sa_</code>. Full schema: <code>supabase/sanjay_aqua_full.sql</code>. Extra: <code>supabase/driver_edit_3days.sql</code>.</li>
+      <li><strong>Live:</strong> plant dashboard subscribes so new deliveries appear without refresh.</li>
+      <li><strong>PWA-ish:</strong> manifest, theme colour, apple web-app title Aqua Jar.</li>
+      <li><strong>Print/PNG:</strong> CSS print hide chrome; html2canvas for save image.</li>
+    </ul>
+    <div class="box warn">
+      Do not put the Supabase <em>service_role</em> key in the app. Only the anon public key. Do not touch database tables that are not <code>sa_*</code>.
+    </div>
+
+    <h2>19. End-to-end story (one plant, one boy)</h2>
+    <ol class="flow-ol">
+      <li>Owner: Naya account → username <code>kkkk</code>, firm name, password.</li>
+      <li>Help overlay: welcome, fayde, “maine delivery man lagaya hai”.</li>
+      <li>+ Add → “Mayur” → Key banao → Copy.</li>
+      <li>WhatsApp Mayur: company username (header) + key.</li>
+      <li>Mayur: login Delivery man, add “Akash gym”, confirm 20 jars on the gadi.</li>
+      <li>Shop: Diye 2, Khali 1, Delivery pura.</li>
+      <li>Owner phone: dashboard fills; Market shows leftover jars; Live is green.</li>
+      <li>Mayur finishes route, counts return; mismatch would flag.</li>
+      <li>Owner sets rate on Akash gym, opens bill, prints, records payment.</li>
+      <li>Mahina / Hisaab for the accountant or the owner’s own close.</li>
+    </ol>
+
+    <h2>20. Screen map (URLs)</h2>
+    <table>
+      <tr><th>Hash</th><th>Screen</th></tr>
+      <tr><td><code>#/start</code></td><td>Welcome</td></tr>
+      <tr><td><code>#/signup</code></td><td>New plant</td></tr>
+      <tr><td><code>#/login</code></td><td>Plant login</td></tr>
+      <tr><td><code>#/login/driver</code></td><td>Delivery login</td></tr>
+      <tr><td><code>#/owner</code> … today/month/year/all</td><td>Plant dashboard</td></tr>
+      <tr><td><code>#/owner/pending/…</code></td><td>Market jars</td></tr>
+      <tr><td><code>#/owner/sheet/…</code></td><td>Balance sheet</td></tr>
+      <tr><td><code>#/owner/bill/{id}/…</code></td><td>Invoice + payments</td></tr>
+      <tr><td><code>#/owner/driver/{id}/…</code></td><td>One delivery man</td></tr>
+      <tr><td><code>#/owner/loss/…</code></td><td>Cap / toot</td></tr>
+      <tr><td><code>#/</code> or <code>#/day/{date}</code></td><td>Delivery route</td></tr>
+      <tr><td><code>#/sequence/{date}</code></td><td>Stop order</td></tr>
+      <tr><td><code>#/customers</code></td><td>Delivery customer list</td></tr>
+    </table>
+
+    <h2>21. One-page cheat sheet — all primary buttons</h2>
+    <p><span class="ui">Naya account</span> <span class="ui">Pehle se account hai</span> <span class="ui">Account banao</span> <span class="ui">Login</span> <span class="ui">Plant</span> <span class="ui">Delivery man</span> <span class="ui">Help</span> <span class="ui">Logout</span> <span class="ui">Guide kholo</span> <span class="ui">+ Add</span> <span class="ui">Key banao</span> <span class="ui">Copy</span> <span class="ui">Rate</span> <span class="ui">Customer / rate</span> <span class="ui">Print</span> <span class="ui">Save image</span> <span class="ui">Payment save</span> <span class="ui">Hatao</span> <span class="ui">Confirm — gadi bhari</span> <span class="ui">Delivery pura ✓</span> <span class="ui">Wapas incomplete</span> <span class="ui">+ Naya customer</span> <span class="ui">Edit</span> <span class="ui">Save</span> <span class="ui">Cancel</span> <span class="ui">Aage</span> <span class="ui">Peeche</span> <span class="ui">Baad mein</span> <span class="ui">Samajh gaya</span> <span class="ui">Sunno</span></p>
+
+    <footer class="note">
+      This guide describes the Aqua Jar product as implemented in the Sanjay Aqua / Aqua Jar codebase (September 2026).
+      UI strings change with the language picker; default quoted labels are Hindi (Roman).
+      Jalgaon is printed as a sample address on invoices; firm name is per plant.
+    </footer>
+  </main>
+</body>
+</html>

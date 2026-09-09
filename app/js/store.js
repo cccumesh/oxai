@@ -1,7 +1,7 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js";
-import { t, dateLocale } from "./i18n.js";
+import * as db from "./db.js?v=64";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=64";
+import { t, dateLocale } from "./i18n.js?v=64";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -246,11 +246,12 @@ function mapTrip(trip) {
     brokeJars: trip?.broke_jars || 0,
     rokdaJars: trip?.rokda_jars || 0,
     returnedJars: trip?.returned_jars || 0,
+    loadConfirmed: false,
   };
 }
 
 function emptyTrip() {
-  return { filledOut: 0, filledBack: 0, wasteJars: 0, leakJars: 0, brokeJars: 0, rokdaJars: 0, returnedJars: 0 };
+  return { filledOut: 0, filledBack: 0, wasteJars: 0, leakJars: 0, brokeJars: 0, rokdaJars: 0, returnedJars: 0, loadConfirmed: false };
 }
 
 export function tripLoss(trip) {
@@ -454,8 +455,44 @@ async function loadOwner(dateStr) {
 
 const TRIP_FIELDS = new Set(["filledOut", "filledBack", "wasteJars", "leakJars", "brokeJars", "rokdaJars", "returnedJars"]);
 
+function loadOkKey(dateStr) {
+  return `sa-load-ok:${state.device?.id || "x"}:${dateStr}`;
+}
+
+function readLoadOk(dateStr) {
+  try { return localStorage.getItem(loadOkKey(dateStr)) === "1"; } catch { return false; }
+}
+
+function writeLoadOk(dateStr, on) {
+  try {
+    if (on) localStorage.setItem(loadOkKey(dateStr), "1");
+    else localStorage.removeItem(loadOkKey(dateStr));
+  } catch { /* ignore */ }
+}
+
+function routeAlreadyStarted(dateStr) {
+  return Object.values(getDay(dateStr).entries || {}).some(
+    (e) => e.status === "complete" || (e.jarsGiven || 0) > 0 || (e.emptyCollected || 0) > 0
+  );
+}
+
 export function getTrip(dateStr) {
-  return state.trips[dateStr] || emptyTrip();
+  if (!state.trips[dateStr]) state.trips[dateStr] = emptyTrip();
+  if (state.trips[dateStr].loadConfirmed || readLoadOk(dateStr) || routeAlreadyStarted(dateStr)) {
+    state.trips[dateStr].loadConfirmed = true;
+  }
+  return state.trips[dateStr];
+}
+
+export function isLoadConfirmed(dateStr) {
+  return !!getTrip(dateStr).loadConfirmed;
+}
+
+export function confirmLoad(dateStr) {
+  if (!canEditWorkDate(dateStr)) return;
+  const trip = { ...getTrip(dateStr), loadConfirmed: true };
+  state.trips[dateStr] = trip;
+  writeLoadOk(dateStr, true);
 }
 
 export function vehicleStock(dateStr) {
@@ -522,8 +559,24 @@ function queuePersist(key, fn, ms = 280) {
   }, ms);
 }
 
-function queuePersistEntry(dateStr, customerId) {
-  queuePersist(`e:${dateStr}:${customerId}`, () => persistEntry(dateStr, customerId));
+function queuePersistEntry(dateStr, customerId, afterSave) {
+  queuePersist(`e:${dateStr}:${customerId}`, async () => {
+    await persistEntry(dateStr, customerId);
+    if (afterSave) await afterSave();
+  }, afterSave ? 60 : 280);
+}
+
+function applyLocalPending(customerId, given, picked, sign) {
+  const c = getCustomer(customerId);
+  if (!c) return;
+  c.pendingJars = Math.max(0, (c.pendingJars || 0) + sign * ((given || 0) - (picked || 0)));
+}
+
+async function refreshPendingAndWapas(dateStr, customerId) {
+  const pending = await db.recomputePending(customerId);
+  const c = getCustomer(customerId);
+  if (c) c.pendingJars = pending;
+  await syncWapasFromStock(dateStr);
 }
 
 function queuePersistTrip(dateStr) {
@@ -544,6 +597,7 @@ function syncWapasLocal(dateStr) {
 }
 
 export function bumpTrip(dateStr, field, delta) {
+  if (!canEditWorkDate(dateStr)) return;
   if (!TRIP_FIELDS.has(field)) return;
   const trip = { ...getTrip(dateStr) };
   trip[field] = Math.max(0, (Number(trip[field]) || 0) + Number(delta));
@@ -553,6 +607,7 @@ export function bumpTrip(dateStr, field, delta) {
 }
 
 export function setTripCount(dateStr, field, value) {
+  if (!canEditWorkDate(dateStr)) return;
   if (!TRIP_FIELDS.has(field)) return;
   const trip = { ...getTrip(dateStr) };
   trip[field] = Math.max(0, Math.min(9999, Number(value) || 0));
@@ -562,6 +617,7 @@ export function setTripCount(dateStr, field, value) {
 }
 
 export async function syncWapasFromStock(dateStr) {
+  if (!canEditWorkDate(dateStr)) return;
   const day = getDay(dateStr);
   const entries = Object.values(day.entries || {});
   if (!entries.length || entries.some((e) => e.status !== "complete")) return;
@@ -575,7 +631,7 @@ export async function syncWapasFromStock(dateStr) {
 }
 
 async function persistTrip(dateStr) {
-  if (!state.device) return;
+  if (!state.device || !canEditWorkDate(dateStr)) return;
   for (let i = 0; i < 4; i++) {
     const trip = getTrip(dateStr);
     const stamp = JSON.stringify(trip);
@@ -764,6 +820,7 @@ export function routeIds(dateStr) {
 }
 
 async function persistEntry(dateStr, customerId) {
+  if (!canEditWorkDate(dateStr)) return;
   const c = getCustomer(customerId);
   const e = getDay(dateStr).entries[customerId];
   if (!c || !e || !state.device) return;
@@ -786,6 +843,7 @@ async function persistEntry(dateStr, customerId) {
 }
 
 export function bump(dateStr, customerId, field, delta) {
+  if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
   if (!e) return;
   e[field] = Math.max(0, Math.min(999, (e[field] || 0) + delta));
@@ -793,6 +851,7 @@ export function bump(dateStr, customerId, field, delta) {
 }
 
 export function setCount(dateStr, customerId, field, value) {
+  if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
   if (!e) return;
   e[field] = Math.max(0, Math.min(999, Number(value) || 0));
@@ -800,6 +859,7 @@ export function setCount(dateStr, customerId, field, value) {
 }
 
 export function fillUsual(dateStr, customerId) {
+  if (!canEditWorkDate(dateStr)) return;
   const c = getCustomer(customerId);
   const e = getDay(dateStr).entries[customerId];
   if (!c || !e) return;
@@ -807,27 +867,25 @@ export function fillUsual(dateStr, customerId) {
   queuePersistEntry(dateStr, customerId);
 }
 
-export async function markComplete(dateStr, customerId) {
+export function markComplete(dateStr, customerId) {
+  if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
-  if (!e) return;
+  if (!e || e.status === "complete") return;
   e.status = "complete";
   e.completedAt = Date.now();
-  await persistEntry(dateStr, customerId);
-  const pending = await db.recomputePending(customerId);
-  const c = getCustomer(customerId);
-  if (c) c.pendingJars = pending;
-  await syncWapasFromStock(dateStr);
+  applyLocalPending(customerId, e.jarsGiven, e.emptyCollected, 1);
+  syncWapasLocal(dateStr);
+  queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
 }
 
-export async function markPending(dateStr, customerId) {
+export function markPending(dateStr, customerId) {
+  if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
-  if (!e) return;
+  if (!e || e.status !== "complete") return;
+  applyLocalPending(customerId, e.jarsGiven, e.emptyCollected, -1);
   e.status = "pending";
   e.completedAt = null;
-  await persistEntry(dateStr, customerId);
-  const pending = await db.recomputePending(customerId);
-  const c = getCustomer(customerId);
-  if (c) c.pendingJars = pending;
+  queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
 }
 
 export async function setRouteOrder(dateStr, _driverId, orderedIds) {
@@ -922,7 +980,9 @@ export function dayStats(dateStr) {
   };
 }
 
-export function lastWorkDates(count = 4) {
+export const DRIVER_EDIT_DAYS = 3;
+
+export function lastWorkDates(count = DRIVER_EDIT_DAYS) {
   const dates = [];
   const base = parseDate(businessDate());
   for (let i = 0; i < count; i++) {
@@ -931,6 +991,11 @@ export function lastWorkDates(count = 4) {
     dates.push(formatDate(d));
   }
   return dates;
+}
+
+export function canEditWorkDate(dateStr) {
+  if (!dateStr) return false;
+  return lastWorkDates().includes(dateStr);
 }
 
 export async function listDays() {

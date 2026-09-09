@@ -1,20 +1,21 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=64";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=64";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=64";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
   bump, fillUsual, markComplete, markPending, moveRoute, addCustomer,
   updateCustomer, deactivateCustomer, dayStats, getDay, setCount,
   routeIds, setRouteOrder, moveSequence, ownerStats, refreshDate,
-  getTrip, bumpTrip, setTripCount, lastWorkDates, periodRange, loadOwnerRange,
+  getTrip, bumpTrip, setTripCount, isLoadConfirmed, confirmLoad, lastWorkDates, canEditWorkDate, periodRange, loadOwnerRange,
   ownerPeriodStats, ownerDriverDetail, ownerCustomerLedger, vehicleStock, tripLoss, returnExpect,
   rupee, inrWords, billDate, ownerLossByDriver, ownerBalanceSheet,
   ownerCustomerPeriodJars, ownerCustomerMoney, monthLabel, addPayment, removePayment,
   isMonthRegister, ownerDriverRegister, getFirmName,
   signupOwner, loginOwner, loginDriverAccount, addDriverAccount, ensureDriverKey, logout,
-} from "./store.js";
+} from "./store.js?v=64";
+import { maybeStartTour, openTour } from "./help.js?v=64";
 
 const app = document.getElementById("app");
 let tick = null;
@@ -23,6 +24,57 @@ let busy = false;
 let ownerCustQuery = "";
 let userCheckTimer = null;
 let loginWaitUntil = 0;
+let copiedFlashKey = "";
+let copiedFlashTimer = 0;
+
+function copyKeyLabel(key) {
+  return copiedFlashKey && key && copiedFlashKey === key ? `✓ ${t("copied")}` : t("copy");
+}
+
+function copyKeyClass(key) {
+  return copiedFlashKey && key && copiedFlashKey === key ? "ghost rate-btn copied" : "ghost rate-btn";
+}
+
+async function copySilent(text) {
+  const val = String(text || "");
+  if (!val) return false;
+  try {
+    await navigator.clipboard.writeText(val);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = val;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function flashCopied(key, btn) {
+  copiedFlashKey = key;
+  const target = btn || document.querySelector(`[data-act=copy-key][data-key="${CSS.escape(key)}"]`);
+  if (target) {
+    target.classList.add("copied");
+    target.textContent = `✓ ${t("copied")}`;
+  }
+  clearTimeout(copiedFlashTimer);
+  copiedFlashTimer = setTimeout(() => {
+    copiedFlashKey = "";
+    document.querySelectorAll("[data-act=copy-key].copied").forEach((b) => {
+      b.classList.remove("copied");
+      b.textContent = t("copy");
+    });
+  }, 3000);
+}
 
 function loginWaitLeft() {
   return Math.max(0, Math.ceil((loginWaitUntil - Date.now()) / 1000));
@@ -104,13 +156,16 @@ function header({ subtitle, date, showTimer }) {
             <path d="M24 16c0 0-7 8.8-7 14a7 7 0 0014 0c0-5.2-7-14-7-14z" fill="#ecfeff"/>
           </svg>
         </div>
-        <div>
+        <div class="brand-text">
           <h1>${firm}</h1>
-          <p>${subtitle || me?.name || t("delivery_man")}</p>
+          <p>${subtitle || me?.name || t("delivery_man")}${session?.role === "owner" && session.username ? " · " + session.username : ""}</p>
         </div>
         <div class="day-chip">
           ${langPicker("mini")}
-          ${session ? `<button type="button" class="logout-btn" data-act="logout">${t("logout")}</button>` : ""}
+          ${session ? `<div class="head-acts">
+            <button type="button" class="logout-btn help-btn" data-act="help-open">${t("help")}</button>
+            <button type="button" class="logout-btn" data-act="logout">${t("logout")}</button>
+          </div>` : ""}
           <div>${displayDate(date || today)}${isPast ? " · " + t("first_day") : ""}</div>
           ${isOwnerRoute() ? `<div class="live-dot">${t("live")}</div>` : showTimer !== false ? `<div class="timer" data-timer="${date || today}">${isPast ? t("edit_allowed") : formatRemain(remain)}</div>` : ""}
         </div>
@@ -125,8 +180,8 @@ function dayHref(d) {
 
 function dayStrip(activeDate) {
   const today = businessDate();
-  const dates = lastWorkDates(4);
-  const labels = [t("today"), t("yesterday"), t("days_ago_2"), t("days_ago_3")];
+  const dates = lastWorkDates();
+  const labels = [t("today"), t("yesterday"), t("days_ago_2")];
   return `
     <div class="day-tabs">
       ${dates.map((d, i) => `
@@ -162,15 +217,15 @@ function bottomNav(active, range) {
 
 function renderConfig() {
   app.innerHTML = `
-    ${header({ subtitle: "Supabase setup", showTimer: false })}
+    ${header({ subtitle: t("config_sub"), showTimer: false })}
     <main class="wrap">
       <div class="card">
-        <h3 style="margin-bottom:8px;color:var(--deep)">Pehle database jodo</h3>
-        <p class="muted" style="margin-bottom:12px">Supabase SQL Editor mein <b>sanjay_aqua_full.sql</b> chalao, phir Project Settings → API se URL aur anon key yahan paste karo.</p>
+        <h3 style="margin-bottom:8px;color:var(--deep)">${t("config_h")}</h3>
+        <p class="muted" style="margin-bottom:12px">${t("config_p")}</p>
         <form data-form="config">
           <div class="field"><label>Project URL</label><input name="url" required placeholder="https://xxxx.supabase.co" /></div>
           <div class="field"><label>anon public key</label><input name="key" required placeholder="eyJ..." /></div>
-          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">Save & connect</button>
+          <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px">${t("config_save")}</button>
         </form>
         <p class="muted" style="margin-top:14px">Login: <b>#/login</b></p>
       </div>
@@ -275,6 +330,50 @@ function afterPreview(c, e) {
   return (c.pendingJars || 0) + (e.jarsGiven || 0) - (e.emptyCollected || 0);
 }
 
+function guideNote(key, vars) {
+  return `
+    <div class="guide-note">
+      <div class="guide-top">
+        <strong>${t("guide_title")}</strong>
+        <button type="button" class="speak-btn" data-act="speak-text" data-key="${key}" aria-label="${t("speak")}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+            <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <p>${t(key, vars)}</p>
+    </div>
+  `;
+}
+
+function ownerSetupCard() {
+  return `
+    <div class="setup-card">
+      <div class="guide-top">
+        <strong>${t("guide_title")}</strong>
+        <button type="button" class="speak-btn" data-act="speak-text" data-key="owner_welcome" aria-label="${t("speak")}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+            <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M18.7 6.3a8 8 0 010 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <p class="setup-lead">${t("setup_lead")}</p>
+      <div class="row-btns">
+        <button type="button" class="primary" data-act="help-open">${t("guide_open")}</button>
+        <button type="button" class="ghost" data-act="add-driver">${t("add")}</button>
+      </div>
+    </div>
+  `;
+}
+
+function ownerHasLoginKey() {
+  return (getState().owner?.drivers || []).some((d) => d.login_key);
+}
+
 function speakBtn(id) {
   return `
     <button type="button" class="speak-btn" data-act="speak" data-id="${id}" aria-label="${t("speak")}">
@@ -316,12 +415,18 @@ function customerCard(date, id, complete) {
           <div class="cust-name">${c.name}</div>
           ${speakBtn(id)}
         </div>
-        <div class="pending-box"><b>${c.pendingJars}</b><span>${t("market_pending")}</span></div>
-        <div class="done-meta">
-          <span>${t("given")}: ${e.jarsGiven}</span>
-          <span>${t("picked")}: ${e.emptyCollected}</span>
-          <span>${when}</span>
+        <div class="done-stats">
+          <div class="done-stat">
+            <span>${t("given")}</span>
+            <b>${e.jarsGiven}</b>
+          </div>
+          <div class="done-stat">
+            <span>${t("picked")}</span>
+            <b>${e.emptyCollected}</b>
+          </div>
         </div>
+        <div class="done-left ${c.pendingJars > 0 ? "hot" : ""}">${c.pendingJars > 0 ? t("done_left", { n: c.pendingJars }) : t("done_left_zero")}</div>
+        ${when ? `<div class="done-meta"><span>${when}</span></div>` : ""}
         <button class="undo" data-act="undo" data-id="${id}">${t("back_pending")}</button>
       </article>
     `;
@@ -445,16 +550,17 @@ function dayFootHtml(date, stats) {
   `;
 }
 
-function plantBoxHtml(date, stock) {
+function plantBoxHtml(date, stock, { confirmed } = {}) {
+  const n = getTrip(date).filledOut || 0;
   return `
-      <div class="plant-box">
+      <div class="plant-box ${confirmed ? "plant-settled" : "plant-start"}">
         <h3>${t("vehicle_filled")}</h3>
         <div class="stock-row">
           <div class="counter">
             <label>${t("took_filled")}</label>
             <div class="stepper">
               <button class="minus" data-act="trip-bump" data-field="filledOut" data-delta="-1">−</button>
-              <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="filledOut" value="${getTrip(date).filledOut}" />
+              <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="filledOut" value="${n}" />
               <button class="plus" data-act="trip-bump" data-field="filledOut" data-delta="1">+</button>
             </div>
           </div>
@@ -472,6 +578,9 @@ function plantBoxHtml(date, stock) {
         </div>
         ${rokdaHtml(date)}
         ${stock.remaining < 0 ? `<p class="stock-warn">${t("stock_over")}</p>` : ""}
+        ${confirmed
+          ? `<p class="load-ok-note">${t("load_ok_note", { n })}</p>`
+          : `<button type="button" class="done-btn load-ok-btn" data-act="load-ok" ${n < 1 ? "disabled" : ""}>${t("load_confirm")}</button>`}
       </div>
   `;
 }
@@ -534,16 +643,13 @@ function renderHome(dateUse) {
   const stats = dayStats(date);
   const stock = vehicleStock(date);
   const isPast = date !== businessDate();
-  const titles = { 0: t("today_route"), 1: t("yesterday_route"), 2: t("days_ago_2"), 3: t("days_ago_3") };
-  const idx = lastWorkDates(4).indexOf(date);
+  const titles = { 0: t("today_route"), 1: t("yesterday_route"), 2: t("days_ago_2") };
+  const idx = lastWorkDates().indexOf(date);
   const when = titles[idx] || displayDate(date);
   const allDone = pending.length === 0 && stats.total > 0;
-  app.innerHTML = `
-    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + when, date, showTimer: !isPast })}
-    <main class="wrap">
-      ${isPast ? `<div class="banner">${t("past_page", { when })}</div>` : ""}
-      ${allDone ? dayCloseHtml(date, pending, stats, stock) : plantBoxHtml(date, stock)}
-      ${allDone ? "" : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>`}
+  const loadOk = isLoadConfirmed(date);
+  const plantBox = plantBoxHtml(date, stock, { confirmed: loadOk });
+  const customers = `
       ${allDone ? "" : `
       <div class="section-h">
         <h2>${t("left_cust")}</h2>
@@ -561,8 +667,23 @@ function renderHome(dateUse) {
         <span class="count">${done.length}</span>
       </div>
       ${done.length ? done.map((id) => customerCard(date, id, true)).join("") : `<div class="empty">${t("after_done")}</div>`}
-      ${returnPanelHtml(date)}
-      ${dayFootHtml(date, stats)}
+  `;
+  const routeKpi = allDone ? "" : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>`;
+  const closeBlock = allDone ? dayCloseHtml(date, pending, stats, stock) : "";
+  const returns = `${returnPanelHtml(date)}${dayFootHtml(date, stats)}`;
+  let mainBody = "";
+  if (allDone) {
+    mainBody = `${closeBlock}${plantBox}${returns}${customers}`;
+  } else if (loadOk) {
+    mainBody = `${customers}${routeKpi}${plantBox}${returns}`;
+  } else {
+    mainBody = `${plantBox}${routeKpi}${customers}${returns}`;
+  }
+  app.innerHTML = `
+    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + when, date, showTimer: !isPast })}
+    <main class="wrap">
+      ${isPast ? `<div class="banner">${t("past_page", { when })}</div>` : ""}
+      ${mainBody}
     </main>
     <button class="fab" data-act="add-open">${t("new_cust")}</button>
     ${bottomNav("home")}
@@ -662,10 +783,9 @@ function renderOwner(range) {
   const s = ownerPeriodStats();
   const path = periodPath(range);
   const gineBad = s.returnMismatch || ((s.counted || 0) > 0 && s.counted !== s.expectTotal);
-  app.innerHTML = `
-    ${header({ subtitle: t("plant_dash") + " · " + range.label, date: range.to, showTimer: false })}
-    <main class="wrap">
-      ${ownerPeriodTabs("#/owner", range)}
+  const hasKey = ownerHasLoginKey();
+  const setupFirst = !hasKey;
+  const kpis = `
       <div class="kpis kpis-3">
         <div class="kpi"><b>${s.filledOut}</b><span>${t("filled_from_plant")}</span></div>
         <div class="kpi"><b>${s.jarsToCustomers + (s.rokda || 0)}</b><span>${t("sold")}</span></div>
@@ -691,10 +811,18 @@ function renderOwner(range) {
       <a class="kpi accent-kpi" href="#/owner/pending/${path}" style="display:block">
         <b>${s.pendingMarket}</b><span>${t("at_shops")}</span>
       </a>
+  `;
+  app.innerHTML = `
+    ${header({ subtitle: t("plant_dash") + " · " + range.label, date: range.to, showTimer: false })}
+    <main class="wrap">
+      ${setupFirst ? "" : ownerPeriodTabs("#/owner", range)}
+      ${setupFirst ? ownerSetupCard() : ""}
+      ${setupFirst ? "" : kpis}
       <div class="section-h">
         <h2>${t("delivery_man")}</h2>
         <button type="button" class="ghost rate-btn" data-act="add-driver">${t("add")}</button>
       </div>
+      ${setupFirst ? "" : guideNote("owner_key_help")}
       ${s.byDriver.length ? s.byDriver.map((d) => {
         const full = (getState().owner.drivers || []).find((x) => x.id === d.id);
         const key = full?.login_key || "";
@@ -710,14 +838,17 @@ function renderOwner(range) {
             <span class="go">${t("table")}</span>
           </a>
           <p class="driver-key-line">${t("key")}: <b>${key || t("not_yet")}</b>
-            ${key ? `<button type="button" class="ghost rate-btn" data-act="copy-key" data-key="${key}">${t("copy")}</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">${t("make_key")}</button>`}
+            ${key ? `<button type="button" class="${copyKeyClass(key)}" data-act="copy-key" data-key="${key}">${copyKeyLabel(key)}</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">${t("make_key")}</button>`}
           </p>
         </div>
       `;
       }).join("") : `<div class="empty">${t("add_dm")}</div>`}
       <div class="section-h owner-cust-head">
-        <h2>Customers</h2>
-        <input class="cust-search" data-act="cust-search" type="search" placeholder="${t("search_cust")}" value="${ownerCustQuery.replace(/"/g, "&quot;")}" autocomplete="off" />
+        <h2>${t("customers")}</h2>
+        <div class="search-help">
+          <input class="cust-search" data-act="cust-search" type="search" placeholder="${t("search_cust")}" value="${ownerCustQuery.replace(/"/g, "&quot;")}" autocomplete="off" />
+          <button type="button" class="ghost help-inline" data-act="help-open">${t("help")}</button>
+        </div>
       </div>
       <div id="owner-cust-list">${stateCustomersList(path, range)}</div>
       <a class="bs-cta" href="#/owner/sheet/${path}">
@@ -1205,7 +1336,10 @@ function renderOwnerBill(customerId, range) {
   app.innerHTML = `
     ${header({ subtitle: t("bill") + " · " + c.name, date: range.to, showTimer: false })}
     <main class="wrap">
-      <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
+      <div class="bill-tools no-print">
+        <a class="back-link" href="#/owner/${path}">${t("back_dash")}</a>
+        <button type="button" class="ghost help-inline" data-act="help-open">${t("help")}</button>
+      </div>
       ${ownerPeriodTabs(`#/owner/bill/${customerId}`, range)}
       ${rateOk ? "" : `<div class="banner no-print">${t("no_rate")}</div>`}
       <div class="row-btns no-print" style="margin-bottom:12px">
@@ -1548,6 +1682,10 @@ async function render(opts = {}) {
     startOwnerLive();
   } else {
     haltOwnerLive();
+    if (r.date && !canEditWorkDate(r.date)) {
+      location.hash = "#/";
+      return;
+    }
     if (r.view === "sequence") {
       if (!opts.skipLoad && r.date) await refreshDate(r.date);
       renderSequence(r.date);
@@ -1558,6 +1696,7 @@ async function render(opts = {}) {
     }
   }
   window.scrollTo(0, y);
+  if (!opts.skipLoad) maybeStartTour();
 }
 
 function startTimer() {
@@ -1588,21 +1727,53 @@ function paintFast() {
   render({ skipLoad: true });
 }
 
+function setBusyUI(on, label) {
+  const layer = document.getElementById("busy-layer");
+  if (!layer) return;
+  const text = layer.querySelector("[data-busy-text]");
+  if (text) text.textContent = label || t("wait_now");
+  layer.hidden = !on;
+  document.body.classList.toggle("is-busy", on);
+}
+
+function markFormWait(form) {
+  if (!form) return;
+  const btn = form.querySelector("button[type=submit]");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.dataset.label = btn.textContent;
+  btn.innerHTML = `<span class="busy-spin mini"></span> ${t("wait_now")}`;
+}
+
 async function run(fn) {
   if (busy) return;
   busy = true;
+  setBusyUI(true);
   try { await fn(); }
   catch (err) { alert(err.message || err); }
-  finally { busy = false; }
+  finally {
+    busy = false;
+    setBusyUI(false);
+  }
 }
 
+document.addEventListener("dblclick", (ev) => {
+  if (ev.target.closest("button, .stepper, a, .card, .plant-box, .wrap")) ev.preventDefault();
+});
+
 document.addEventListener("click", (ev) => {
+  if (ev.target.closest("#tour-layer")) return;
   const el = ev.target.closest("[data-act]");
   if (!el) return;
   const act = el.dataset.act;
   const id = el.dataset.id;
   const date = app.dataset.date || parseHash().date || businessDate();
 
+  if (act === "help-open") {
+    ev.preventDefault();
+    openTour(getSession()?.role === "owner" || isOwnerRoute() ? "owner" : "driver");
+    return;
+  }
   if (act === "add-open") openAdd();
   if (act === "logout") {
     ev.preventDefault();
@@ -1623,7 +1794,8 @@ document.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     const key = el.dataset.key || "";
-    if (key) navigator.clipboard?.writeText(key).then(() => alert(t("key_copy", { k: key }))).catch(() => alert(key));
+    if (!key) return;
+    copySilent(key).then((ok) => { if (ok) flashCopied(key, el); });
     return;
   }
   if (act === "make-key") {
@@ -1631,9 +1803,10 @@ document.addEventListener("click", (ev) => {
     ev.stopPropagation();
     run(async () => {
       const key = await ensureDriverKey(id);
-      alert(t("login_key_is", { k: key }));
+      await copySilent(key);
       keepScroll = true;
       await render();
+      flashCopied(key);
     });
     return;
   }
@@ -1655,6 +1828,13 @@ document.addEventListener("click", (ev) => {
     const name = prompt(t("name"), d?.name || "");
     if (name) run(async () => { await renameDriver(name); await render(); });
   }
+  if (act === "load-ok") {
+    if ((getTrip(date).filledOut || 0) < 1) return;
+    confirmLoad(date);
+    window.scrollTo(0, 0);
+    paintFast();
+    return;
+  }
   if (act === "trip-bump") {
     bumpTrip(date, el.dataset.field, Number(el.dataset.delta));
     paintFast();
@@ -1667,12 +1847,15 @@ document.addEventListener("click", (ev) => {
     fillUsual(date, id);
     paintFast();
   }
-  if (act === "done") run(async () => {
-    await markComplete(date, id);
-    keepScroll = pendingIds(date).length > 0;
-    await render();
-  });
-  if (act === "undo") run(async () => { await markPending(date, id); keepScroll = true; await render(); });
+  if (act === "done") {
+    markComplete(date, id);
+    if (pendingIds(date).length === 0) window.scrollTo(0, 0);
+    paintFast();
+  }
+  if (act === "undo") {
+    markPending(date, id);
+    paintFast();
+  }
   if (act === "up") run(async () => { await moveRoute(date, null, id, -1); keepScroll = true; await render(); });
   if (act === "down") run(async () => { await moveRoute(date, null, id, 1); keepScroll = true; await render(); });
   if (act === "seq-up") run(async () => { await moveSequence(date, null, id, -1); keepScroll = true; await render(); });
@@ -1689,6 +1872,18 @@ document.addEventListener("click", (ev) => {
     ev.stopPropagation();
     const c = getCustomer(id);
     if (c?.name) speakName(c.name);
+    return;
+  }
+  if (act === "speak-text") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const key = el.dataset.key || "";
+    if (key === "owner_welcome") {
+      speakName(t("owner_welcome", { u: getState().org?.username || getSession()?.username || "username" }));
+      return;
+    }
+    const note = el.closest(".guide-note, .setup-card")?.querySelector("p")?.textContent;
+    speakName(note || t(key));
     return;
   }
   if (act === "edit-cust") {
@@ -1821,6 +2016,7 @@ document.addEventListener("submit", (ev) => {
     return;
   }
   if (form.dataset.form === "login-owner") {
+    markFormWait(form);
     run(async () => {
       try {
         await loginOwner({ username: fd.get("username"), password: fd.get("password") });
@@ -1836,6 +2032,7 @@ document.addEventListener("submit", (ev) => {
     return;
   }
   if (form.dataset.form === "login-driver") {
+    markFormWait(form);
     run(async () => {
       try {
         await loginDriverAccount({ username: fd.get("username"), key: fd.get("key") });
@@ -1851,6 +2048,7 @@ document.addEventListener("submit", (ev) => {
     return;
   }
   if (form.dataset.form === "signup") {
+    markFormWait(form);
     run(async () => {
       const pass = String(fd.get("password") || "");
       const confirm = String(fd.get("confirm") || "");
@@ -1865,9 +2063,10 @@ document.addEventListener("submit", (ev) => {
     run(async () => {
       const row = await addDriverAccount(String(fd.get("name") || ""));
       closeModal();
-      alert(t("login_key_is", { k: row.login_key }) + "\n" + t("give_key"));
+      await copySilent(row.login_key);
       keepScroll = true;
       await render();
+      flashCopied(row.login_key);
     });
     return;
   }
@@ -1896,6 +2095,20 @@ document.addEventListener("submit", (ev) => {
   });
 });
 
+function fitPhoneFrame() {
+  const scale = window.visualViewport?.scale || 1;
+  if (scale <= 1.02) return;
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  const allow = "width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover, shrink-to-fit=no";
+  meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, shrink-to-fit=no");
+  setTimeout(() => meta.setAttribute("content", allow), 80);
+}
+
 window.addEventListener("hashchange", () => { run(render); });
-run(render);
+window.addEventListener("pageshow", fitPhoneFrame);
+run(async () => {
+  await render();
+  fitPhoneFrame();
+});
 startTimer();

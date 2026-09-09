@@ -149,10 +149,12 @@ drop policy if exists sa_deliveries_select on sa_deliveries;
 drop policy if exists sa_deliveries_write on sa_deliveries;
 drop policy if exists sa_deliveries_insert on sa_deliveries;
 drop policy if exists sa_deliveries_update on sa_deliveries;
+drop policy if exists sa_deliveries_delete on sa_deliveries;
 drop policy if exists sa_day_trips_select on sa_day_trips;
 drop policy if exists sa_day_trips_write on sa_day_trips;
 drop policy if exists sa_day_trips_insert on sa_day_trips;
 drop policy if exists sa_day_trips_update on sa_day_trips;
+drop policy if exists sa_day_trips_delete on sa_day_trips;
 drop policy if exists sa_payments_owner on sa_payments;
 
 revoke all on sa_orgs from anon, authenticated, public;
@@ -276,6 +278,25 @@ as $$
     sa_auth_role() = 'owner'
     or p_device = sa_auth_device()
   );
+$$;
+
+create or replace function sa_india_today()
+returns date
+language sql
+stable
+as $$
+  select (timezone('Asia/Kolkata', now()))::date;
+$$;
+
+create or replace function sa_driver_can_edit_date(p_date date)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, extensions
+as $$
+  select sa_auth_role() = 'owner'
+    or (p_date is not null and p_date >= sa_india_today() - 2);
 $$;
 
 create or replace function sa_username_taken(p_username text)
@@ -570,6 +591,8 @@ grant execute on function sa_auth_device() to anon, authenticated;
 grant execute on function sa_can_org(uuid) to anon, authenticated;
 grant execute on function sa_can_device(uuid, uuid) to anon, authenticated;
 grant execute on function sa_request_token() to anon, authenticated;
+grant execute on function sa_india_today() to anon, authenticated;
+grant execute on function sa_driver_can_edit_date(date) to anon, authenticated;
 
 create policy sa_devices_select on sa_devices
   for select using (sa_can_device(org_id, id));
@@ -592,18 +615,22 @@ create policy sa_customers_update on sa_customers
 create policy sa_deliveries_select on sa_deliveries
   for select using (sa_can_device(org_id, device_id));
 create policy sa_deliveries_insert on sa_deliveries
-  for insert with check (sa_can_device(org_id, device_id));
+  for insert with check (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date));
 create policy sa_deliveries_update on sa_deliveries
-  for update using (sa_can_device(org_id, device_id))
-  with check (sa_can_device(org_id, device_id));
+  for update using (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date))
+  with check (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date));
+create policy sa_deliveries_delete on sa_deliveries
+  for delete using (false);
 
 create policy sa_day_trips_select on sa_day_trips
   for select using (sa_can_device(org_id, device_id));
 create policy sa_day_trips_insert on sa_day_trips
-  for insert with check (sa_can_device(org_id, device_id));
+  for insert with check (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date));
 create policy sa_day_trips_update on sa_day_trips
-  for update using (sa_can_device(org_id, device_id))
-  with check (sa_can_device(org_id, device_id));
+  for update using (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date))
+  with check (sa_can_device(org_id, device_id) and sa_driver_can_edit_date(work_date));
+create policy sa_day_trips_delete on sa_day_trips
+  for delete using (false);
 
 create policy sa_payments_owner on sa_payments
   for all using (sa_can_org(org_id) and sa_auth_role() = 'owner')
