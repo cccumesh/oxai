@@ -1,5 +1,5 @@
-import { t, speakLocale } from "./i18n.js?v=78";
-import { getSession } from "./auth.js?v=78";
+import { t, speakLocale } from "./i18n.js?v=80";
+import { getSession } from "./auth.js?v=80";
 
 let state = { open: false, kind: "owner", i: 0, who: null, first: false, needPick: false };
 

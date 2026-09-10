@@ -1,121 +1,20 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js?v=78";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=78";
-import { t, dateLocale } from "./i18n.js?v=78";
+import * as db from "./db.js?v=80";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=80";
+import { t, dateLocale } from "./i18n.js?v=80";
+import {
+  formatDate, parseDate, displayDate, monthLabel, rupee, inrWords, billDate, pad,
+} from "./format.js?v=80";
+import {
+  emptyStop, syncEntryFromStops, ensureStops, getStop, emptyEntry, entryFromRows, entryStamp,
+} from "./stops.js?v=80";
+
+export {
+  formatDate, parseDate, displayDate, monthLabel, rupee, inrWords, billDate,
+};
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
-
-function pad(n) {
-  return String(n).padStart(2, "0");
-}
-
-export function formatDate(d) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-export function parseDate(str) {
-  const [y, m, day] = str.split("-").map(Number);
-  return new Date(y, m - 1, day);
-}
-
-export function displayDate(str) {
-  const d = parseDate(str);
-  return d.toLocaleDateString(dateLocale(), {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function emptyStop(stopNo = 1) {
-  return {
-    stopNo: Number(stopNo) || 1,
-    jarsGiven: 0,
-    emptyCollected: 0,
-    thermosGiven: 0,
-    thermosCollected: 0,
-    dropPlace: "",
-  };
-}
-
-function syncEntryFromStops(e) {
-  if (!e) return e;
-  if (!Array.isArray(e.stops) || !e.stops.length) {
-    e.stops = [emptyStop(1)];
-  }
-  e.stops.sort((a, b) => (a.stopNo || 0) - (b.stopNo || 0));
-  e.jarsGiven = e.stops.reduce((s, x) => s + (Number(x.jarsGiven) || 0), 0);
-  e.emptyCollected = e.stops.reduce((s, x) => s + (Number(x.emptyCollected) || 0), 0);
-  e.thermosGiven = e.stops.reduce((s, x) => s + (Number(x.thermosGiven) || 0), 0);
-  e.thermosCollected = e.stops.reduce((s, x) => s + (Number(x.thermosCollected) || 0), 0);
-  e.dropPlace = e.stops.map((x) => String(x.dropPlace || "").trim()).filter(Boolean).join(" · ");
-  return e;
-}
-
-function ensureStops(e) {
-  if (!e) return null;
-  if (!Array.isArray(e.stops) || !e.stops.length) {
-    e.stops = [{
-      stopNo: 1,
-      jarsGiven: Number(e.jarsGiven) || 0,
-      emptyCollected: Number(e.emptyCollected) || 0,
-      thermosGiven: Number(e.thermosGiven) || 0,
-      thermosCollected: Number(e.thermosCollected) || 0,
-      dropPlace: e.dropPlace || "",
-    }];
-  }
-  return syncEntryFromStops(e);
-}
-
-function getStop(e, stopNo) {
-  ensureStops(e);
-  const n = Number(stopNo) || 1;
-  return e.stops.find((s) => Number(s.stopNo) === n) || e.stops[0];
-}
-
-function emptyEntry(customer) {
-  const e = {
-    customerId: customer.id,
-    driverId: customer.device_id,
-    stops: [emptyStop(1)],
-    status: "pending",
-    completedAt: null,
-  };
-  return syncEntryFromStops(e);
-}
-
-function entryFromRows(customer, rows) {
-  const list = (rows || []).slice().sort((a, b) => (a.stop_no || 1) - (b.stop_no || 1));
-  if (!list.length) return emptyEntry(customer);
-  const stops = list.map((r) => ({
-    stopNo: r.stop_no || 1,
-    jarsGiven: r.jars_given || 0,
-    emptyCollected: r.empty_collected || 0,
-    thermosGiven: r.thermos_given || 0,
-    thermosCollected: r.thermos_collected || 0,
-    dropPlace: r.drop_place || "",
-  }));
-  const top = list.every((r) => r.status === "complete") ? list[list.length - 1] : list.find((r) => r.status !== "complete") || list[0];
-  const e = {
-    customerId: customer.id,
-    driverId: customer.device_id,
-    stops,
-    status: list.every((r) => r.status === "complete") ? "complete" : "pending",
-    completedAt: top.completed_at ? new Date(top.completed_at).getTime() : null,
-  };
-  return syncEntryFromStops(e);
-}
-
-function entryStamp(e) {
-  ensureStops(e);
-  return JSON.stringify({
-    status: e.status,
-    completedAt: e.completedAt,
-    stops: e.stops,
-  });
-}
 
 function buildDay(dateStr, customers, rows) {
   const entries = {};
@@ -303,8 +202,17 @@ async function loadDriver(dateStr) {
   state.customers = (await db.listCustomers(deviceId)).map(mapCustomer);
   const rows = await db.listDeliveries(deviceId, dateStr);
   state.days[dateStr] = buildDay(dateStr, state.customers, rows);
-  const trip = await db.fetchTrip(deviceId, dateStr);
-  state.trips[dateStr] = mapTrip(trip);
+  const [marketTrip, orderTrip] = await Promise.all([
+    db.fetchTrip(deviceId, dateStr, "market"),
+    db.fetchTrip(deviceId, dateStr, "order"),
+  ]);
+  state.trips[tripKey(dateStr, "market")] = mapTrip(marketTrip);
+  state.trips[tripKey(dateStr, "order")] = mapTrip(orderTrip);
+}
+
+function tripKey(dateStr, mode = currentWorkMode()) {
+  const kind = mode === "order" ? "order" : "market";
+  return `${dateStr}|${kind}`;
 }
 
 function mapTrip(trip) {
@@ -457,13 +365,6 @@ export function ownerCustomerMoney(customerId) {
   };
 }
 
-export function monthLabel(ym) {
-  if (!ym || String(ym).length < 7) return ym || "—";
-  const [y, m] = String(ym).split("-").map(Number);
-  if (!y || !m) return ym;
-  return new Date(y, m - 1, 1).toLocaleDateString(dateLocale(), { month: "short", year: "numeric" });
-}
-
 function ymd(v) {
   return String(v || "").slice(0, 10);
 }
@@ -586,8 +487,9 @@ const TRIP_FIELDS = new Set([
   "rokdaJars", "returnedJars", "thermosOut", "thermosBack",
 ]);
 
-function loadOkKey(dateStr) {
-  return `sa-load-ok:${state.device?.id || "x"}:${dateStr}`;
+function loadOkKey(dateStr, mode = currentWorkMode()) {
+  const kind = mode === "order" ? "order" : "market";
+  return `sa-load-ok:${state.device?.id || "x"}:${dateStr}:${kind}`;
 }
 
 function readLoadOk(dateStr) {
@@ -602,22 +504,25 @@ function writeLoadOk(dateStr, on) {
 }
 
 function routeAlreadyStarted(dateStr) {
+  const ids = modeCustomerIds();
   return Object.values(getDay(dateStr).entries || {}).some(
     (e) =>
-      e.status === "complete" ||
-      (e.jarsGiven || 0) > 0 ||
-      (e.emptyCollected || 0) > 0 ||
-      (e.thermosGiven || 0) > 0 ||
-      (e.thermosCollected || 0) > 0
+      ids.has(e.customerId) &&
+      (e.status === "complete" ||
+        (e.jarsGiven || 0) > 0 ||
+        (e.emptyCollected || 0) > 0 ||
+        (e.thermosGiven || 0) > 0 ||
+        (e.thermosCollected || 0) > 0)
   );
 }
 
 export function getTrip(dateStr) {
-  if (!state.trips[dateStr]) state.trips[dateStr] = emptyTrip();
-  if (state.trips[dateStr].loadConfirmed || readLoadOk(dateStr) || routeAlreadyStarted(dateStr)) {
-    state.trips[dateStr].loadConfirmed = true;
+  const key = tripKey(dateStr);
+  if (!state.trips[key]) state.trips[key] = emptyTrip();
+  if (state.trips[key].loadConfirmed || readLoadOk(dateStr) || routeAlreadyStarted(dateStr)) {
+    state.trips[key].loadConfirmed = true;
   }
-  return state.trips[dateStr];
+  return state.trips[key];
 }
 
 export function isLoadConfirmed(dateStr) {
@@ -626,15 +531,19 @@ export function isLoadConfirmed(dateStr) {
 
 export function confirmLoad(dateStr) {
   if (!canEditWorkDate(dateStr)) return;
+  const key = tripKey(dateStr);
   const trip = { ...getTrip(dateStr), loadConfirmed: true };
-  state.trips[dateStr] = trip;
+  state.trips[key] = trip;
   writeLoadOk(dateStr, true);
 }
 
 export function vehicleStock(dateStr) {
   const trip = getTrip(dateStr);
   const day = getDay(dateStr);
-  const complete = Object.values(day.entries || {}).filter((e) => e.status === "complete");
+  const ids = modeCustomerIds();
+  const complete = Object.values(day.entries || {}).filter(
+    (e) => e.status === "complete" && ids.has(e.customerId)
+  );
   const delivered = complete.reduce((s, e) => s + (e.jarsGiven || 0), 0);
   const thermosDelivered = complete.reduce((s, e) => s + (e.thermosGiven || 0), 0);
   const thermosPicked = complete.reduce((s, e) => s + (e.thermosCollected || 0), 0);
@@ -725,28 +634,32 @@ async function refreshPendingAndWapas(dateStr, customerId) {
 }
 
 function queuePersistTrip(dateStr) {
-  queuePersist(`t:${dateStr}`, async () => {
+  const mode = currentWorkMode();
+  queuePersist(`t:${dateStr}:${mode}`, async () => {
     await persistTrip(dateStr);
   });
 }
 
 function syncWapasLocal(dateStr) {
   const day = getDay(dateStr);
-  const entries = Object.values(day.entries || {});
+  const ids = modeCustomerIds();
+  const entries = Object.values(day.entries || {}).filter((e) => ids.has(e.customerId));
   if (!entries.length || entries.some((e) => e.status !== "complete")) return;
+  const key = tripKey(dateStr);
   const trip = { ...getTrip(dateStr) };
   const wapas = Math.max(0, vehicleStock(dateStr).remaining);
   if (trip.filledBack === wapas) return;
   trip.filledBack = wapas;
-  state.trips[dateStr] = trip;
+  state.trips[key] = trip;
 }
 
 export function bumpTrip(dateStr, field, delta) {
   if (!canEditWorkDate(dateStr)) return;
   if (!TRIP_FIELDS.has(field)) return;
+  const key = tripKey(dateStr);
   const trip = { ...getTrip(dateStr) };
   trip[field] = Math.max(0, (Number(trip[field]) || 0) + Number(delta));
-  state.trips[dateStr] = trip;
+  state.trips[key] = trip;
   if (field !== "filledBack" && field !== "returnedJars") syncWapasLocal(dateStr);
   queuePersistTrip(dateStr);
 }
@@ -754,9 +667,10 @@ export function bumpTrip(dateStr, field, delta) {
 export function setTripCount(dateStr, field, value) {
   if (!canEditWorkDate(dateStr)) return;
   if (!TRIP_FIELDS.has(field)) return;
+  const key = tripKey(dateStr);
   const trip = { ...getTrip(dateStr) };
   trip[field] = Math.max(0, Math.min(9999, Number(value) || 0));
-  state.trips[dateStr] = trip;
+  state.trips[key] = trip;
   if (field !== "filledBack" && field !== "returnedJars") syncWapasLocal(dateStr);
   queuePersistTrip(dateStr);
 }
@@ -764,19 +678,22 @@ export function setTripCount(dateStr, field, value) {
 export async function syncWapasFromStock(dateStr) {
   if (!canEditWorkDate(dateStr)) return;
   const day = getDay(dateStr);
-  const entries = Object.values(day.entries || {});
+  const ids = modeCustomerIds();
+  const entries = Object.values(day.entries || {}).filter((e) => ids.has(e.customerId));
   if (!entries.length || entries.some((e) => e.status !== "complete")) return;
+  const key = tripKey(dateStr);
   const trip = { ...getTrip(dateStr) };
   const stock = vehicleStock(dateStr);
   const wapas = Math.max(0, stock.remaining);
   if (trip.filledBack === wapas) return;
   trip.filledBack = wapas;
-  state.trips[dateStr] = trip;
+  state.trips[key] = trip;
   await persistTrip(dateStr);
 }
 
 async function persistTrip(dateStr) {
   if (!state.device || !canEditWorkDate(dateStr)) return;
+  const mode = currentWorkMode();
   for (let i = 0; i < 4; i++) {
     const trip = getTrip(dateStr);
     const stamp = JSON.stringify(trip);
@@ -785,6 +702,7 @@ async function persistTrip(dateStr) {
       device_id: state.device.id,
       org_id: orgId(),
       work_date: dateStr,
+      route_kind: mode === "order" ? "order" : "market",
       filled_out: trip.filledOut,
       filled_back: trip.filledBack,
       leak_jars: trip.leakJars || 0,
@@ -1686,51 +1604,6 @@ function plantByDate(trips, deliveries) {
       };
     })
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-}
-
-export function rupee(n) {
-  return (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function threeWords(n) {
-  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
-  const teens = ["Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-  const h = Math.floor(n / 100);
-  const r = n % 100;
-  const parts = [];
-  if (h) parts.push(ones[h] + " Hundred");
-  if (r) {
-    if (r < 10) parts.push(ones[r]);
-    else if (r < 20) parts.push(teens[r - 10]);
-    else parts.push(tens[Math.floor(r / 10)] + (r % 10 ? " " + ones[r % 10] : ""));
-  }
-  return parts.join(" ");
-}
-
-export function inrWords(amount) {
-  const n = Math.round((Number(amount) || 0) * 100) / 100;
-  const rupees = Math.floor(n);
-  const paise = Math.round((n - rupees) * 100);
-  if (!rupees && !paise) return "Rupees Zero Only";
-  const crore = Math.floor(rupees / 1e7);
-  const lakh = Math.floor((rupees % 1e7) / 1e5);
-  const thousand = Math.floor((rupees % 1e5) / 1000);
-  const rest = rupees % 1000;
-  const parts = [];
-  if (crore) parts.push(threeWords(crore) + " Crore");
-  if (lakh) parts.push(threeWords(lakh) + " Lakh");
-  if (thousand) parts.push(threeWords(thousand) + " Thousand");
-  if (rest) parts.push(threeWords(rest));
-  let out = "Rupees " + (parts.join(" ") || "Zero");
-  if (paise) out += " and Paise " + threeWords(paise);
-  return out + " Only";
-}
-
-export function billDate(str) {
-  if (!str) return "—";
-  const d = parseDate(str);
-  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 export function setDropPlace(dateStr, customerId, place, stopNo) {

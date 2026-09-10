@@ -50,7 +50,8 @@ create table if not exists sa_day_trips (
   broke_jars int not null default 0,
   rokda_jars int not null default 0,
   returned_jars int not null default 0,
-  unique (device_id, work_date)
+  route_kind text not null default 'market',
+  unique (device_id, work_date, route_kind)
 );
 
 -- Payment / udhari (paisa). Jar pending alag cheez hai.
@@ -102,6 +103,10 @@ alter table sa_deliveries drop constraint if exists sa_deliveries_device_id_cust
 alter table sa_day_trips add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
 alter table sa_day_trips add column if not exists thermos_out int not null default 0;
 alter table sa_day_trips add column if not exists thermos_back int not null default 0;
+alter table sa_day_trips add column if not exists route_kind text not null default 'market';
+alter table sa_day_trips drop constraint if exists sa_day_trips_device_id_work_date_key;
+create unique index if not exists sa_day_trips_device_date_kind
+  on sa_day_trips (device_id, work_date, route_kind);
 alter table sa_payments add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
 
 create table if not exists sa_sessions (

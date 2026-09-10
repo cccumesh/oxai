@@ -1,7 +1,8 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=78";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=78";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=78";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=80";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=80";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=80";
+import { micHoldButton, installMicHold } from "./mic.js?v=80";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -18,8 +19,8 @@ import {
   isOrderDriver, customerDeliveryType, deviceDeliveryType, setDropPlace,
   addOrderStop, removeOrderStop, currentWorkMode, setWorkMode, deviceBaseType,
   customerRouteKind, modeCustomers,
-} from "./store.js?v=78";
-import { maybeStartTour, openTour } from "./help.js?v=78";
+} from "./store.js?v=80";
+import { maybeStartTour, openTour } from "./help.js?v=80";
 
 const app = document.getElementById("app");
 let tick = null;
@@ -415,72 +416,6 @@ function speakName(text) {
   synth.speak(u);
 }
 
-function micIconSvg() {
-  return `<svg class="mic-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
-}
-
-let holdMicRec = null;
-let holdMicInput = null;
-
-function stopHoldMic() {
-  const input = holdMicInput;
-  try { holdMicRec?.stop?.(); } catch { /* ignore */ }
-  holdMicRec = null;
-  holdMicInput = null;
-  document.querySelectorAll(".mic-hold.on").forEach((b) => b.classList.remove("on"));
-  if (input) input.classList.remove("listening");
-}
-
-function startHoldMic(btn) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const stop = btn?.dataset?.stop || "1";
-  const input = btn?.closest(".order-side, .card")?.querySelector(`input[data-act=drop-place][data-stop="${stop}"]`)
-    || btn?.closest(".drop-place-field")?.querySelector("input");
-  if (!SR || !input) {
-    alert(t("no_mic"));
-    return;
-  }
-  stopHoldMic();
-  try {
-    const rec = new SR();
-    rec.lang = speakLocale() || "hi-IN";
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    holdMicRec = rec;
-    holdMicInput = input;
-    btn.classList.add("on");
-    input.classList.add("listening");
-    let finalText = "";
-    rec.onresult = (ev) => {
-      let interim = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const piece = String(ev.results[i][0]?.transcript || "").trim();
-        if (!piece) continue;
-        if (ev.results[i].isFinal) {
-          finalText = finalText ? `${finalText} ${piece}` : piece;
-        } else {
-          interim = piece;
-        }
-      }
-      input.value = (finalText + (interim ? ` ${interim}` : "")).trim().slice(0, 120);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    rec.onerror = () => stopHoldMic();
-    rec.onend = () => {
-      if (holdMicRec === rec) {
-        const said = String(input.value || "").trim();
-        if (said) input.dispatchEvent(new Event("change", { bubbles: true }));
-        stopHoldMic();
-      }
-    };
-    rec.start();
-  } catch {
-    stopHoldMic();
-    alert(t("no_mic"));
-  }
-}
-
 function orderStopBlock(date, id, e, stop, index) {
   const sn = stop.stopNo || index + 1;
   const stopPrev = stopMarketPreview(
@@ -501,7 +436,7 @@ function orderStopBlock(date, id, e, stop, index) {
         <label>${t("drop_place")}</label>
         <div class="place-mic-row">
           <input type="text" data-act="drop-place" data-id="${id}" data-stop="${sn}" value="${String(stop.dropPlace || "").replace(/"/g, "&quot;")}" placeholder="${t("drop_place_ph")}" maxlength="120" autocomplete="off" />
-          <button type="button" class="mic-hold" data-act="mic-hold" data-id="${id}" data-stop="${sn}" title="${t("mic_hold")}" aria-label="${t("mic_hold")}">${micIconSvg()}</button>
+          ${micHoldButton(id, sn)}
         </div>
       </div>
       <div class="counters counters-4">
@@ -2353,30 +2288,6 @@ document.addEventListener("dblclick", (ev) => {
   if (ev.target.closest("button, .stepper, a, .card, .plant-box, .wrap")) ev.preventDefault();
 });
 
-document.addEventListener("pointerdown", (ev) => {
-  const btn = ev.target.closest("[data-act=mic-hold]");
-  if (!btn) return;
-  ev.preventDefault();
-  try { btn.setPointerCapture?.(ev.pointerId); } catch { /* ignore */ }
-  startHoldMic(btn);
-});
-
-document.addEventListener("pointerup", () => {
-  if (holdMicRec) stopHoldMic();
-});
-
-document.addEventListener("pointercancel", () => {
-  if (holdMicRec) stopHoldMic();
-});
-
-document.addEventListener("lostpointercapture", () => {
-  if (holdMicRec) stopHoldMic();
-});
-
-document.addEventListener("contextmenu", (ev) => {
-  if (ev.target.closest("[data-act=mic-hold]")) ev.preventDefault();
-});
-
 document.addEventListener("click", (ev) => {
   if (ev.target.closest("#tour-layer")) return;
   const el = ev.target.closest("[data-act]");
@@ -2816,6 +2727,7 @@ window.addEventListener("hashchange", () => { run(render); });
 window.addEventListener("pageshow", fitPhoneFrame);
 run(async () => {
   await render();
-  fitPhoneFrame();
+  installMicHold();
+fitPhoneFrame();
 });
 startTimer();

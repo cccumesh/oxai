@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
-import { getSession } from "./auth.js?v=78";
-import { t, serverMsg } from "./i18n.js?v=78";
+import { getSession } from "./auth.js?v=80";
+import { t, serverMsg } from "./i18n.js?v=80";
 
 let client = null;
 let authToken = "";
@@ -444,15 +444,28 @@ export function runJarLedger(rows) {
   return { pending: Math.max(0, pending), extras };
 }
 
-export async function fetchTrip(deviceId, date) {
-  const { data, error } = await getClient()
+export async function fetchTrip(deviceId, date, routeKind = "market") {
+  const kind = routeKind === "order" ? "order" : "market";
+  const withKind = await getClient()
     .from("sa_day_trips")
     .select("*")
     .eq("device_id", deviceId)
     .eq("work_date", date)
+    .eq("route_kind", kind)
     .maybeSingle();
-  if (error) throw new Error(denyMsg(error));
-  return data;
+  if (!withKind.error) return withKind.data;
+  if (/route_kind/i.test(String(withKind.error.message || ""))) {
+    const { data, error } = await getClient()
+      .from("sa_day_trips")
+      .select("*")
+      .eq("device_id", deviceId)
+      .eq("work_date", date)
+      .maybeSingle();
+    if (error) throw new Error(denyMsg(error));
+    // Purana shared trip: sirf us mode me dikhao jisse DM pehle tha
+    return data;
+  }
+  throw new Error(denyMsg(withKind.error));
 }
 
 export async function listTrips(date) {
@@ -471,16 +484,24 @@ export async function listTripsMonth(fromDate, toDate) {
 
 export async function upsertTrip(row) {
   const payload = { ...row };
+  if (!payload.route_kind) payload.route_kind = "market";
   for (let i = 0; i < 8; i++) {
+    const conflict = "route_kind" in payload
+      ? "device_id,work_date,route_kind"
+      : "device_id,work_date";
     const res = await getClient()
       .from("sa_day_trips")
-      .upsert(payload, { onConflict: "device_id,work_date" })
+      .upsert(payload, { onConflict: conflict })
       .select()
       .single();
     if (!res.error) return res.data;
     const missing = String(res.error.message || "").match(/Could not find the '([^']+)' column/);
     if (missing && missing[1] in payload) {
       delete payload[missing[1]];
+      continue;
+    }
+    if (/no unique|ON CONFLICT|exclusion/i.test(String(res.error.message || "")) && "route_kind" in payload) {
+      delete payload.route_kind;
       continue;
     }
     throw new Error(serverMsg(res.error.message));
