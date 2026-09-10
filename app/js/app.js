@@ -1,7 +1,7 @@
 import { saveSupabaseConfig } from "./config.js";
-import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=68";
-import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=68";
-import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=68";
+import { resetClient, subscribeOwnerLive, stopOwnerLive, usernameTaken } from "./db.js?v=78";
+import { getSession, normalizeUsername, usernameSuggestions } from "./auth.js?v=78";
+import { t, langPicker, setLang, speakLocale, dateLocale } from "./i18n.js?v=78";
 import {
   load, getState, businessDate, displayDate, remainingMs,
   getDriver, renameDriver, getCustomer, pendingIds, completeIds,
@@ -14,15 +14,20 @@ import {
   ownerCustomerPeriodJars, ownerCustomerMoney, monthLabel, addPayment, removePayment,
   isMonthRegister, ownerDriverRegister, getFirmName,
   signupOwner, loginOwner, loginDriverAccount, addDriverAccount, ensureDriverKey, logout,
-  ownerExtraJars, stopMarketPreview, ownerPlantReturnByDriver,
-} from "./store.js?v=68";
-import { maybeStartTour, openTour } from "./help.js?v=68";
+  ownerExtraJars, stopMarketPreview, stopThermosPreview, ownerPlantReturnByDriver,
+  isOrderDriver, customerDeliveryType, deviceDeliveryType, setDropPlace,
+  addOrderStop, removeOrderStop, currentWorkMode, setWorkMode, deviceBaseType,
+  customerRouteKind, modeCustomers,
+} from "./store.js?v=78";
+import { maybeStartTour, openTour } from "./help.js?v=78";
 
 const app = document.getElementById("app");
 let tick = null;
 let keepScroll = false;
 let busy = false;
 let ownerCustQuery = "";
+let ownerCustKind = "market";
+let ownerDashKind = "market";
 let userCheckTimer = null;
 let loginWaitUntil = 0;
 let copiedFlashKey = "";
@@ -290,18 +295,18 @@ function renderLogin(mode = "owner") {
         <h2>${t("dm_login")}</h2>
         <p class="muted">${t("dm_login_hint")}</p>
         ${wait ? `<div class="banner" data-login-wait>${t("wait_prefix")} <b data-wait-sec>${wait}</b> ${t("wait_suffix")}</div>` : ""}
-        <form data-form="login-driver">
-          <div class="field"><label>${t("company_user")}</label><input name="username" required autocomplete="username" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
-          <div class="field"><label>${t("login_key")}</label><input name="key" required autocomplete="off" placeholder="ABCD-EFGH" style="text-transform:uppercase;letter-spacing:0.08em" ${wait ? "disabled" : ""} /></div>
+        <form data-form="login-driver" autocomplete="off">
+          <div class="field"><label>${t("company_user")}</label><input name="username" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
+          <div class="field"><label>${t("login_key")}</label><input name="key" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH" style="text-transform:uppercase;letter-spacing:0.08em" ${wait ? "disabled" : ""} /></div>
           <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px" ${wait ? "disabled" : ""}>${wait ? t("wait_btn") : t("login")}</button>
         </form>
       ` : `
         <h2>${t("plant_login")}</h2>
         <p class="muted">${t("plant_login_hint")}</p>
         ${wait ? `<div class="banner" data-login-wait>${t("wait_prefix")} <b data-wait-sec>${wait}</b> ${t("wait_suffix")}</div>` : ""}
-        <form data-form="login-owner">
-          <div class="field"><label>${t("username")}</label><input name="username" required autocomplete="username" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
-          <div class="field"><label>${t("password")}</label><input name="password" type="password" required autocomplete="current-password" minlength="6" ${wait ? "disabled" : ""} /></div>
+        <form data-form="login-owner" autocomplete="off">
+          <div class="field"><label>${t("username")}</label><input name="username" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${t("user_ph")}" ${wait ? "disabled" : ""} /></div>
+          <div class="field"><label>${t("password")}</label><input name="password" type="password" required autocomplete="new-password" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" minlength="6" ${wait ? "disabled" : ""} /></div>
           <button class="primary" type="submit" style="width:100%;border:0;border-radius:12px;padding:12px" ${wait ? "disabled" : ""}>${wait ? t("wait_btn") : t("login")}</button>
         </form>
       `}
@@ -410,11 +415,151 @@ function speakName(text) {
   synth.speak(u);
 }
 
+function micIconSvg() {
+  return `<svg class="mic-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
+}
+
+let holdMicRec = null;
+let holdMicInput = null;
+
+function stopHoldMic() {
+  const input = holdMicInput;
+  try { holdMicRec?.stop?.(); } catch { /* ignore */ }
+  holdMicRec = null;
+  holdMicInput = null;
+  document.querySelectorAll(".mic-hold.on").forEach((b) => b.classList.remove("on"));
+  if (input) input.classList.remove("listening");
+}
+
+function startHoldMic(btn) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const stop = btn?.dataset?.stop || "1";
+  const input = btn?.closest(".order-side, .card")?.querySelector(`input[data-act=drop-place][data-stop="${stop}"]`)
+    || btn?.closest(".drop-place-field")?.querySelector("input");
+  if (!SR || !input) {
+    alert(t("no_mic"));
+    return;
+  }
+  stopHoldMic();
+  try {
+    const rec = new SR();
+    rec.lang = speakLocale() || "hi-IN";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    holdMicRec = rec;
+    holdMicInput = input;
+    btn.classList.add("on");
+    input.classList.add("listening");
+    let finalText = "";
+    rec.onresult = (ev) => {
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const piece = String(ev.results[i][0]?.transcript || "").trim();
+        if (!piece) continue;
+        if (ev.results[i].isFinal) {
+          finalText = finalText ? `${finalText} ${piece}` : piece;
+        } else {
+          interim = piece;
+        }
+      }
+      input.value = (finalText + (interim ? ` ${interim}` : "")).trim().slice(0, 120);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    rec.onerror = () => stopHoldMic();
+    rec.onend = () => {
+      if (holdMicRec === rec) {
+        const said = String(input.value || "").trim();
+        if (said) input.dispatchEvent(new Event("change", { bubbles: true }));
+        stopHoldMic();
+      }
+    };
+    rec.start();
+  } catch {
+    stopHoldMic();
+    alert(t("no_mic"));
+  }
+}
+
+function orderStopBlock(date, id, e, stop, index) {
+  const sn = stop.stopNo || index + 1;
+  const stopPrev = stopMarketPreview(
+    { pendingJars: 0 },
+    { jarsGiven: stop.jarsGiven, emptyCollected: stop.emptyCollected }
+  );
+  const thPrev = stopThermosPreview(
+    { pendingThermos: 0 },
+    { thermosGiven: stop.thermosGiven, thermosCollected: stop.thermosCollected }
+  );
+  return `
+    <div class="order-side" data-stop="${sn}">
+      <div class="order-side-head">
+        <strong>${t("side_n", { n: index + 1 })}</strong>
+        ${index > 0 ? `<button type="button" class="ghost rate-btn" data-act="stop-remove" data-id="${id}" data-stop="${sn}">${t("side_remove")}</button>` : ""}
+      </div>
+      <div class="field drop-place-field">
+        <label>${t("drop_place")}</label>
+        <div class="place-mic-row">
+          <input type="text" data-act="drop-place" data-id="${id}" data-stop="${sn}" value="${String(stop.dropPlace || "").replace(/"/g, "&quot;")}" placeholder="${t("drop_place_ph")}" maxlength="120" autocomplete="off" />
+          <button type="button" class="mic-hold" data-act="mic-hold" data-id="${id}" data-stop="${sn}" title="${t("mic_hold")}" aria-label="${t("mic_hold")}">${micIconSvg()}</button>
+        </div>
+      </div>
+      <div class="counters counters-4">
+        <div class="counter">
+          <label>${t("jars_given")}</label>
+          <div class="stepper">
+            <button class="minus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="jarsGiven" data-delta="-1">−</button>
+            <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-stop="${sn}" data-field="jarsGiven" value="${stop.jarsGiven || 0}" />
+            <button class="plus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="jarsGiven" data-delta="1">+</button>
+          </div>
+        </div>
+        <div class="counter">
+          <label>${t("empty_picked")}</label>
+          <div class="stepper">
+            <button class="minus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="emptyCollected" data-delta="-1">−</button>
+            <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-stop="${sn}" data-field="emptyCollected" value="${stop.emptyCollected || 0}" />
+            <button class="plus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="emptyCollected" data-delta="1">+</button>
+          </div>
+        </div>
+        <div class="counter">
+          <label>${t("thermos_given")}</label>
+          <div class="stepper">
+            <button class="minus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="thermosGiven" data-delta="-1">−</button>
+            <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-stop="${sn}" data-field="thermosGiven" value="${stop.thermosGiven || 0}" />
+            <button class="plus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="thermosGiven" data-delta="1">+</button>
+          </div>
+        </div>
+        <div class="counter">
+          <label>${t("thermos_picked")}</label>
+          <div class="stepper">
+            <button class="minus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="thermosCollected" data-delta="-1">−</button>
+            <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="set" data-id="${id}" data-stop="${sn}" data-field="thermosCollected" value="${stop.thermosCollected || 0}" />
+            <button class="plus" data-act="bump" data-id="${id}" data-stop="${sn}" data-field="thermosCollected" data-delta="1">+</button>
+          </div>
+        </div>
+      </div>
+      <p class="preview muted">${t("jar")}: ${stop.jarsGiven || 0} · ${t("thermos_s")}: ${stop.thermosGiven || 0}${stopPrev.extra || thPrev.extra ? ` · extra` : ""}</p>
+    </div>
+  `;
+}
+
 function customerCard(date, id, complete) {
   const c = getCustomer(id);
   const e = getDay(date).entries[id];
   if (!c || !e) return "";
+  const order = isOrderDriver();
+  const stops = order
+    ? (Array.isArray(e.stops) && e.stops.length ? e.stops : [{
+        stopNo: 1,
+        jarsGiven: e.jarsGiven || 0,
+        emptyCollected: e.emptyCollected || 0,
+        thermosGiven: e.thermosGiven || 0,
+        thermosCollected: e.thermosCollected || 0,
+        dropPlace: e.dropPlace || "",
+      }])
+    : null;
   const prev = stopMarketPreview(c, e);
+  const thPrev = order ? stopThermosPreview(c, e) : null;
   if (complete) {
     const when = e.completedAt ? new Date(e.completedAt).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }) : "";
     return `
@@ -423,19 +568,57 @@ function customerCard(date, id, complete) {
           <div class="cust-name">${c.name}</div>
           ${speakBtn(id)}
         </div>
-        <div class="done-stats">
-          <div class="done-stat">
-            <span>${t("given")}</span>
-            <b>${e.jarsGiven}</b>
-          </div>
-          <div class="done-stat">
-            <span>${t("picked")}</span>
-            <b>${e.emptyCollected}</b>
-          </div>
+        <div class="done-stats ${order ? "done-stats-4" : ""}">
+          <div class="done-stat"><span>${t("given")}</span><b>${e.jarsGiven}</b></div>
+          <div class="done-stat"><span>${t("picked")}</span><b>${e.emptyCollected}</b></div>
+          ${order ? `
+            <div class="done-stat"><span>${t("thermos_given")}</span><b>${e.thermosGiven || 0}</b></div>
+            <div class="done-stat"><span>${t("thermos_picked")}</span><b>${e.thermosCollected || 0}</b></div>
+          ` : ""}
         </div>
+        ${order && stops ? stops.map((s, i) => `
+          <div class="done-meta">
+            <span>${t("side_n", { n: i + 1 })}${s.dropPlace ? `: ${s.dropPlace}` : ""} · ${s.jarsGiven || 0} ${t("jar")} · ${s.thermosGiven || 0} ${t("thermos_s")}</span>
+          </div>
+        `).join("") : ""}
         <div class="done-left ${c.pendingJars > 0 ? "hot" : ""}">${c.pendingJars > 0 ? t("done_left", { n: c.pendingJars }) : t("done_left_zero")}</div>
+        ${order ? `<div class="done-left ${(c.pendingThermos || 0) > 0 ? "hot" : ""}">${(c.pendingThermos || 0) > 0 ? t("done_left_th", { n: c.pendingThermos }) : t("done_left_th_zero")}</div>` : ""}
         ${when ? `<div class="done-meta"><span>${when}</span></div>` : ""}
         <button class="undo" data-act="undo" data-id="${id}">${t("back_pending")}</button>
+      </article>
+    `;
+  }
+  if (order) {
+    return `
+      <article class="card card-order" data-cust="${id}">
+        <div class="cust-top">
+          <div class="ord">
+            <button type="button" data-act="up" data-id="${id}">▲</button>
+            <button type="button" data-act="down" data-id="${id}">▼</button>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div class="cust-name-row">
+              <div class="cust-name">${c.name}</div>
+              ${speakBtn(id)}
+            </div>
+            ${c.place ? `<div class="muted">${c.place}</div>` : ""}
+          </div>
+        </div>
+        <div class="pending-box ${c.pendingJars > 0 ? "hot" : ""}">
+          <b>${c.pendingJars}</b>
+          <span>${t("pending_here")}</span>
+        </div>
+        <div class="pending-box ${(c.pendingThermos || 0) > 0 ? "hot" : ""}">
+          <b>${c.pendingThermos || 0}</b>
+          <span>${t("pending_thermos")}</span>
+        </div>
+        ${stops.map((s, i) => orderStopBlock(date, id, e, s, i)).join("")}
+        <button type="button" class="ghost another-side-btn" data-act="stop-add" data-id="${id}">${t("another_side")}</button>
+        <p class="preview">${t("after_market_n", { n: prev.after })}</p>
+        ${prev.extra > 0 ? `<div class="extra-note">${t("extra_preview", { n: prev.extra })}</div>` : ""}
+        <p class="preview">${t("after_thermos_n", { n: thPrev.after })}</p>
+        ${thPrev.extra > 0 ? `<div class="extra-note">${t("extra_thermos", { n: thPrev.extra })}</div>` : ""}
+        <button class="done-btn" data-act="done" data-id="${id}">${t("del_done")}</button>
       </article>
     `;
   }
@@ -541,11 +724,26 @@ function returnPanelHtml(date) {
       </div>
       ${mismatch ? `<p class="stock-warn">${t("count_bad", { a: x.returned, b: x.totalShould })}</p>` : ""}
       ${x.returned > 0 && x.returned === x.totalShould ? `<p class="return-ok">${t("count_ok", { n: x.returned })}</p>` : ""}
+      ${isOrderDriver() ? `
+        <div class="counter" style="margin-top:12px">
+          <label>${t("count_thermos_return")}</label>
+          <div class="stepper">
+            <button class="minus" data-act="trip-bump" data-field="thermosBack" data-delta="-1">−</button>
+            <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="thermosBack" value="${x.thermosBack || 0}" />
+            <button class="plus" data-act="trip-bump" data-field="thermosBack" data-delta="1">+</button>
+          </div>
+        </div>
+        <p class="muted" style="margin-top:6px">${t("thermos_should", { n: x.thermosShould || 0 })}</p>
+        ${(x.thermosBack || 0) > 0 && Number(x.thermosBack) !== Number(x.thermosShould)
+          ? `<p class="stock-warn">${t("thermos_count_bad", { a: x.thermosBack, b: x.thermosShould })}</p>`
+          : ""}
+      ` : ""}
     </div>
   `;
 }
 
 function dayFootHtml(date, stats) {
+  const order = isOrderDriver();
   return `
     <div class="foot-stats">
       ${dayStrip(date)}
@@ -554,25 +752,43 @@ function dayFootHtml(date, stats) {
         <div class="kpi"><b>${stats.done}</b><span>${t("complete")}</span></div>
         <div class="kpi"><b>${stats.jars + (getTrip(date).rokdaJars || 0)}</b><span>${t("jars_out")}</span></div>
         <div class="kpi"><b>${stats.empty}</b><span>${t("empty_short")}</span></div>
+        ${order ? `
+          <div class="kpi"><b>${stats.thermos || 0}</b><span>${t("thermos_out_s")}</span></div>
+          <div class="kpi"><b>${stats.thermosEmpty || 0}</b><span>${t("thermos_in_s")}</span></div>
+        ` : ""}
       </div>
     </div>
   `;
 }
 
 function plantBoxHtml(date, stock, { confirmed } = {}) {
-  const n = getTrip(date).filledOut || 0;
+  const trip = getTrip(date);
+  const n = trip.filledOut || 0;
+  const th = trip.thermosOut || 0;
+  const order = isOrderDriver();
+  const canConfirm = order ? (n + th) >= 1 : n >= 1;
   return `
       <div class="plant-box ${confirmed ? "plant-settled" : "plant-start"}">
-        <h3>${t("vehicle_filled")}</h3>
-        <div class="stock-row">
+        <h3>${order ? t("vehicle_order_load") : t("vehicle_filled")}</h3>
+        <div class="stock-row ${order ? "stock-row-2" : ""}">
           <div class="counter">
-            <label>${t("took_filled")}</label>
+            <label>${order ? t("jar_bhare") : t("took_filled")}</label>
             <div class="stepper">
               <button class="minus" data-act="trip-bump" data-field="filledOut" data-delta="-1">−</button>
               <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="filledOut" value="${n}" />
               <button class="plus" data-act="trip-bump" data-field="filledOut" data-delta="1">+</button>
             </div>
           </div>
+          ${order ? `
+            <div class="counter">
+              <label>${t("thermos_bhare")}</label>
+              <div class="stepper">
+                <button class="minus" data-act="trip-bump" data-field="thermosOut" data-delta="-1">−</button>
+                <input class="val" type="text" inputmode="numeric" pattern="[0-9]*" data-act="trip-set" data-field="thermosOut" value="${th}" />
+                <button class="plus" data-act="trip-bump" data-field="thermosOut" data-delta="1">+</button>
+              </div>
+            </div>
+          ` : `
           <div class="stock-read ${stock.remaining < 0 ? "stock-bad" : ""}">
             <div class="stock-pair">
               <span>${t("sold")}</span>
@@ -584,12 +800,20 @@ function plantBoxHtml(date, stock, { confirmed } = {}) {
             </div>
             ${stock.leakEmpty ? `<div class="stock-pair"><span>${t("leak_eq")}</span><b>${stock.leakEmpty}</b></div>` : ""}
           </div>
+          `}
         </div>
-        ${rokdaHtml(date)}
-        ${stock.remaining < 0 ? `<p class="stock-warn">${t("stock_over")}</p>` : ""}
+        ${order ? `
+          <div class="stock-read ${stock.remaining < 0 || stock.thermosRemaining < 0 ? "stock-bad" : ""}" style="margin-top:8px">
+            <div class="stock-pair"><span>${t("sold")}</span><b>${stock.sold}</b></div>
+            <div class="stock-pair"><span>${t("now_vehicle")}</span><b>${stock.remaining}</b></div>
+            <div class="stock-pair"><span>${t("thermos_sold")}</span><b>${stock.thermosDelivered || 0}</b></div>
+            <div class="stock-pair"><span>${t("thermos_now")}</span><b>${stock.thermosRemaining || 0}</b></div>
+          </div>
+        ` : rokdaHtml(date)}
+        ${stock.remaining < 0 || (order && stock.thermosRemaining < 0) ? `<p class="stock-warn">${t("stock_over")}</p>` : ""}
         ${confirmed
-          ? `<p class="load-ok-note">${t("load_ok_note", { n })}</p>`
-          : `<button type="button" class="done-btn load-ok-btn" data-act="load-ok" ${n < 1 ? "disabled" : ""}>${t("load_confirm")}</button>`}
+          ? `<p class="load-ok-note">${order ? t("load_ok_order", { j: n, th }) : t("load_ok_note", { n })}</p>`
+          : `<button type="button" class="done-btn load-ok-btn" data-act="load-ok" ${canConfirm ? "" : "disabled"}>${t("load_confirm")}</button>`}
       </div>
   `;
 }
@@ -600,6 +824,62 @@ function dayCloseHtml(date, pending, stats, stock) {
   if (!allDone) return "";
   const loss = tripLoss(trip);
   const rokda = trip.rokdaJars || 0;
+  const order = isOrderDriver();
+  if (order) {
+    const jarLoad = Number(trip.filledOut) || 0;
+    const thLoad = Number(trip.thermosOut) || 0;
+    const jarSale = Number(stock.delivered) || 0;
+    const thSale = Number(stock.thermosDelivered) || 0;
+    const jarBaki = Math.max(0, stats.marketPending || 0);
+    const thBaki = Math.max(0, stats.thermosPending || 0);
+    const jarFilledBack = Number(trip.filledBack) || 0;
+    const thFilledBack = Number(trip.thermosBack) || 0;
+    const jarEmpty = Number(stats.empty) || 0;
+    const thEmpty = Number(stock.thermosPicked) || 0;
+    const tile = (n, label) => `<div class="close-tile"><b>${n}</b><span>${label}</span></div>`;
+    return `
+    <section class="done-hero">
+      <div class="done-check">✓</div>
+      <div>
+        <h2>${t("all_done")}</h2>
+        <p>${t("route_done_hint")}</p>
+      </div>
+    </section>
+    <section class="close-box">
+      <h3>${t("today_hisab")}</h3>
+      <p class="close-row-h">${t("close_plant_load")}</p>
+      <div class="close-grid close-grid-3">
+        ${tile(jarLoad, t("close_jar_load"))}
+        ${tile(thLoad, t("close_th_load"))}
+        ${tile(jarLoad + thLoad, t("close_total_load"))}
+      </div>
+      <p class="close-row-h">${t("close_sale")}</p>
+      <div class="close-grid close-grid-3">
+        ${tile(jarSale, t("close_jar_sale"))}
+        ${tile(thSale, t("close_th_sale"))}
+        ${tile(jarSale + thSale, t("close_total_sale"))}
+      </div>
+      <p class="close-row-h">${t("close_stuck")}</p>
+      <div class="close-grid close-grid-3">
+        ${tile(jarBaki, t("close_jar_baki"))}
+        ${tile(thBaki, t("close_th_baki"))}
+        ${tile(jarBaki + thBaki, t("close_total_stuck"))}
+      </div>
+      <p class="close-row-h">${t("close_filled_back")}</p>
+      <div class="close-grid close-grid-3">
+        ${tile(jarFilledBack, t("close_jar_filled_back"))}
+        ${tile(thFilledBack, t("close_th_filled_back"))}
+        ${tile(jarFilledBack + thFilledBack, t("close_total_filled_back"))}
+      </div>
+      <p class="close-row-h">${t("close_empty_back")}</p>
+      <div class="close-grid close-grid-3">
+        ${tile(jarEmpty, t("close_jar_empty"))}
+        ${tile(thEmpty, t("close_th_empty"))}
+        ${tile(jarEmpty + thEmpty, t("close_total_empty"))}
+      </div>
+    </section>
+  `;
+  }
   return `
     <section class="done-hero">
       <div class="done-check">✓</div>
@@ -677,7 +957,12 @@ function renderHome(dateUse) {
       </div>
       ${done.length ? done.map((id) => customerCard(date, id, true)).join("") : `<div class="empty">${t("after_done")}</div>`}
   `;
-  const routeKpi = allDone ? "" : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>`;
+  const routeKpi = allDone ? "" : (isOrderDriver()
+    ? `<div class="kpis kpis-2" style="margin-bottom:12px">
+        <div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>
+        <div class="kpi accent-kpi"><b>${stats.thermosPending || 0}</b><span>${t("route_pending_th")}</span></div>
+      </div>`
+    : `<div class="kpi accent-kpi"><b>${stats.marketPending}</b><span>${t("route_pending")}</span></div>`);
   const closeBlock = allDone ? dayCloseHtml(date, pending, stats, stock) : "";
   const returns = `${returnPanelHtml(date)}${dayFootHtml(date, stats)}`;
   let mainBody = "";
@@ -689,8 +974,9 @@ function renderHome(dateUse) {
     mainBody = `${plantBox}${routeKpi}${customers}${returns}`;
   }
   app.innerHTML = `
-    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + when, date, showTimer: !isPast })}
+    ${header({ subtitle: (me?.name || t("delivery_man")) + " · " + (isOrderDriver() ? t("type_order") : t("type_market")) + " · " + when, date, showTimer: !isPast })}
     <main class="wrap">
+      ${workModeSwitchHtml()}
       ${isPast ? `<div class="banner">${t("past_page", { when })}</div>` : ""}
       ${mainBody}
     </main>
@@ -740,12 +1026,13 @@ function renderSequence(date) {
 }
 
 function renderCustomers() {
-  const { customers } = getState();
+  const list = modeCustomers();
   app.innerHTML = `
-    ${header({ subtitle: t("my_cust"), showTimer: false })}
+    ${header({ subtitle: t("my_cust") + " · " + (isOrderDriver() ? t("type_order") : t("type_market")), showTimer: false })}
     <main class="wrap">
-      <p class="muted" style="margin-bottom:10px">${t("cust_n", { n: customers.length })}</p>
-      ${customers.length ? customers.map((c) => `
+      ${workModeSwitchHtml()}
+      <p class="muted" style="margin-bottom:10px">${t("cust_n", { n: list.length })}</p>
+      ${list.length ? list.map((c) => `
         <div class="list-item">
           <div style="flex:1;min-width:0">
             <div class="cust-name-row">
@@ -768,11 +1055,39 @@ function periodPath(range) {
   return range.period || "today";
 }
 
+function driverCardsHtml(list, path) {
+  if (!list.length) return `<div class="empty">${t("none_yet")}</div>`;
+  return list.map((d) => {
+    const full = (getState().owner.drivers || []).find((x) => x.id === d.id);
+    const key = full?.login_key || "";
+    const typ = d.deliveryType || deviceBaseType(full) || "market";
+    const orderish = typ === "order" || typ === "both";
+    const chip = typ === "both" ? t("type_both") : orderish ? t("type_order") : t("type_market");
+    return `
+        <div class="driver-card ${d.returnMismatch ? "driver-mismatch" : ""}">
+          <a href="#/owner/driver/${d.id}/${path}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+            <div class="avatar" style="background:${orderish ? "#0f766e" : "#0e7490"}">${(d.name || "?").slice(0, 1)}</div>
+            <div style="flex:1;min-width:0">
+              <h3>${d.name} <span class="type-chip">${chip}</span></h3>
+              <p>${t("took")} ${d.filledOut}${orderish ? ` · ${t("thermos_s")} ${d.thermosOut || 0}` : ""} · ${t("gave_s")} ${d.jars}${orderish ? ` · ${t("thermos_s")} ${d.thermos || 0}` : ""} · ${t("cap_s")} ${d.leak || 0} · ${t("broke_s")} ${d.broke || 0}</p>
+              <p>${t("stuck_m")} ${d.pending || 0} ${t("jar")}${orderish ? ` · ${d.pendingThermos || 0} ${t("thermos_s")}` : ""} · ${t("counted_s")} ${d.counted || 0} / ${d.expectTotal || 0}${d.returnMismatch ? " · " + t("no_match") : ""}</p>
+            </div>
+            <span class="go">${t("table")}</span>
+          </a>
+          <p class="driver-key-line">${t("key")}: <b>${key || t("not_yet")}</b>
+            ${key ? `<button type="button" class="${copyKeyClass(key)}" data-act="copy-key" data-key="${key}">${copyKeyLabel(key)}</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">${t("make_key")}</button>`}
+          </p>
+        </div>
+      `;
+  }).join("");
+}
+
 function ownerPeriodTabs(base, range) {
   const today = businessDate();
   const monthVal = range.month || today.slice(0, 7);
   const items = [
     ["today", t("today")],
+    ["week", t("week")],
     ["month", t("month")],
     ["year", t("year")],
     ["all", t("all")],
@@ -788,13 +1103,135 @@ function ownerPeriodTabs(base, range) {
   `;
 }
 
-function renderOwner(range) {
-  const s = ownerPeriodStats();
-  const path = periodPath(range);
+function sliceOwnerStats(s, kind) {
+  const order = kind === "order";
+  const drivers = (s.byDriver || []).filter((d) => driverInKind(d, kind));
+  const filledOut = drivers.reduce((n, d) => n + (d.filledOut || 0), 0);
+  const thermosOut = drivers.reduce((n, d) => n + (d.thermosOut || 0), 0);
+  const jars = drivers.reduce((n, d) => n + (d.jars || 0), 0);
+  const thermos = drivers.reduce((n, d) => n + (d.thermos || 0), 0);
+  const empty = drivers.reduce((n, d) => n + (d.empty || 0), 0);
+  const thermosEmpty = drivers.reduce((n, d) => n + (d.thermosEmpty || 0), 0);
+  const filledBack = drivers.reduce((n, d) => n + (d.filledBack || 0), 0);
+  const thermosBack = drivers.reduce((n, d) => n + (d.thermosBack || 0), 0);
+  const rokda = drivers.reduce((n, d) => n + (d.rokda || 0), 0);
+  const leak = drivers.reduce((n, d) => n + (d.leak || 0), 0);
+  const broke = drivers.reduce((n, d) => n + (d.broke || 0), 0);
+  const waste = drivers.reduce((n, d) => n + (d.waste || 0), 0);
+  const pending = drivers.reduce((n, d) => n + (d.pending || 0), 0);
+  const pendingThermos = drivers.reduce((n, d) => n + (d.pendingThermos || 0), 0);
+  const counted = drivers.reduce((n, d) => n + (d.counted || 0), 0);
+  const expectTotal = drivers.reduce((n, d) => n + (d.expectTotal || 0), 0);
+  const returnMismatch = drivers.some((d) => d.returnMismatch);
+  return {
+    filledOut,
+    thermosOut,
+    jarsToCustomers: jars,
+    thermos,
+    empty,
+    thermosEmpty,
+    filledBack,
+    thermosBack,
+    rokda,
+    leak,
+    broke,
+    waste,
+    remaining: filledOut - jars - rokda - waste,
+    thermosRemaining: thermosOut - thermos,
+    pendingMarket: pending,
+    pendingThermos,
+    counted,
+    expectTotal,
+    returnMismatch,
+  };
+}
+
+function driverInKind(d, kind) {
+  const typ = d.deliveryType || deviceDeliveryType(d) || deviceBaseType(d);
+  if (kind === "order") return typ === "order" || typ === "both";
+  return typ === "market" || typ === "both";
+}
+
+function workModeSwitchHtml() {
+  const mode = currentWorkMode();
+  return `
+    <div class="work-switch no-print">
+      <div class="kind-toggle" role="group" aria-label="${t("work_switch")}">
+        <button type="button" class="${mode !== "order" ? "on" : ""}" data-act="work-mode" data-mode="market">${t("type_market")}</button>
+        <button type="button" class="${mode === "order" ? "on" : ""}" data-act="work-mode" data-mode="order">${t("type_order")}</button>
+      </div>
+      <p class="muted work-switch-hint">${t("work_switch_hint")}</p>
+    </div>
+  `;
+}
+
+function kindToggleHtml(act, current, idPrefix = "") {
+  return `
+    <div class="kind-toggle" ${idPrefix ? `id="${idPrefix}"` : ""}>
+      <button type="button" class="${current !== "order" ? "on" : ""}" data-act="${act}" data-kind="market">${t("type_market")}</button>
+      <button type="button" class="${current === "order" ? "on" : ""}" data-act="${act}" data-kind="order">${t("type_order")}</button>
+    </div>
+  `;
+}
+
+function ownerDashKpisHtml(full, path, kind) {
+  const s = sliceOwnerStats(full, kind);
+  const order = kind === "order";
   const gineBad = s.returnMismatch || ((s.counted || 0) > 0 && s.counted !== s.expectTotal);
-  const hasKey = ownerHasLoginKey();
-  const setupFirst = !hasKey;
-  const kpis = `
+  if (order) {
+    const jarLoad = s.filledOut || 0;
+    const thLoad = s.thermosOut || 0;
+    const jarSale = s.jarsToCustomers || 0;
+    const thSale = s.thermos || 0;
+    const jarBaki = s.pendingMarket || 0;
+    const thBaki = s.pendingThermos || 0;
+    const jarFilledBack = s.filledBack || 0;
+    const thFilledBack = s.thermosBack || 0;
+    const jarEmpty = s.empty || 0;
+    const thEmpty = s.thermosEmpty || 0;
+    const tile = (n, label) => `<div class="close-tile"><b>${n}</b><span>${label}</span></div>`;
+    return `
+      ${kindToggleHtml("owner-dash-kind", kind, "owner-dash-toggle")}
+      <section class="close-box owner-order-dash">
+        <p class="close-row-h">${t("close_plant_load")}</p>
+        <div class="close-grid close-grid-3">
+          ${tile(jarLoad, t("close_jar_load"))}
+          ${tile(thLoad, t("close_th_load"))}
+          ${tile(jarLoad + thLoad, t("close_total_load"))}
+        </div>
+        <p class="close-row-h">${t("close_sale")}</p>
+        <div class="close-grid close-grid-3">
+          ${tile(jarSale, t("close_jar_sale"))}
+          ${tile(thSale, t("close_th_sale"))}
+          ${tile(jarSale + thSale, t("close_total_sale"))}
+        </div>
+        <p class="close-row-h">${t("close_stuck")}</p>
+        <div class="close-grid close-grid-3">
+          ${tile(jarBaki, t("close_jar_baki"))}
+          ${tile(thBaki, t("close_th_baki"))}
+          ${tile(jarBaki + thBaki, t("close_total_stuck"))}
+        </div>
+        <p class="close-row-h">${t("close_filled_back")}</p>
+        <div class="close-grid close-grid-3">
+          ${tile(jarFilledBack, t("close_jar_filled_back"))}
+          ${tile(thFilledBack, t("close_th_filled_back"))}
+          ${tile(jarFilledBack + thFilledBack, t("close_total_filled_back"))}
+        </div>
+        <p class="close-row-h">${t("close_empty_back")}</p>
+        <div class="close-grid close-grid-3">
+          ${tile(jarEmpty, t("close_jar_empty"))}
+          ${tile(thEmpty, t("close_th_empty"))}
+          ${tile(jarEmpty + thEmpty, t("close_total_empty"))}
+        </div>
+      </section>
+      ${gineBad ? `<p class="stock-warn" style="margin:10px 0 12px">${t("dm_count_warn", { a: s.counted, b: s.expectTotal })}</p>` : ""}
+      <a class="kpi ${gineBad ? "kpi-warn" : ""} kpi-link" href="#/owner/return/${path}" data-act="hash" data-go="#/owner/return/${path}" style="display:block;margin-bottom:12px">
+        <b>${s.counted || 0}<small> / ${s.expectTotal || 0}</small></b><span>${t("counted_need")}</span>
+      </a>
+    `;
+  }
+  return `
+      ${kindToggleHtml("owner-dash-kind", kind, "owner-dash-toggle")}
       <div class="kpis kpis-3">
         <div class="kpi"><b>${s.filledOut}</b><span>${t("filled_from_plant")}</span></div>
         <div class="kpi"><b>${s.jarsToCustomers + (s.rokda || 0)}</b><span>${t("sold")}</span></div>
@@ -828,45 +1265,40 @@ function renderOwner(range) {
         </a>`;
       })()}
   `;
+}
+
+function renderOwner(range) {
+  const s = ownerPeriodStats();
+  const path = periodPath(range);
+  const hasKey = ownerHasLoginKey();
+  const setupFirst = !hasKey;
+  const custKind = ownerCustKind === "order" ? "order" : "market";
+  const dashKind = ownerDashKind === "order" ? "order" : "market";
   app.innerHTML = `
     ${header({ subtitle: t("plant_dash") + " · " + range.label, date: range.to, showTimer: false })}
     <main class="wrap">
       ${setupFirst ? "" : ownerPeriodTabs("#/owner", range)}
       ${setupFirst ? ownerSetupCard() : ""}
-      ${setupFirst ? "" : kpis}
+      ${setupFirst ? "" : `<div id="owner-dash-kpis">${ownerDashKpisHtml(s, path, dashKind)}</div>`}
       <div class="section-h">
-        <h2>${t("delivery_man")}</h2>
+        <h2>${t("dm_market")}</h2>
         <button type="button" class="ghost rate-btn" data-act="add-driver">${t("add")}</button>
       </div>
       ${setupFirst ? "" : guideNote("owner_key_help")}
-      ${s.byDriver.length ? s.byDriver.map((d) => {
-        const full = (getState().owner.drivers || []).find((x) => x.id === d.id);
-        const key = full?.login_key || "";
-        return `
-        <div class="driver-card ${d.returnMismatch ? "driver-mismatch" : ""}">
-          <a href="#/owner/driver/${d.id}/${path}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
-            <div class="avatar" style="background:#0e7490">${(d.name || "?").slice(0, 1)}</div>
-            <div style="flex:1">
-              <h3>${d.name}</h3>
-              <p>${t("took")} ${d.filledOut} · ${t("gave_s")} ${d.jars} · ${t("cap_s")} ${d.leak || 0} · ${t("broke_s")} ${d.broke || 0}</p>
-              <p>${t("stuck_m")} ${d.pending || 0} ${t("jar")} · ${t("counted_s")} ${d.counted || 0} / ${d.expectTotal || 0}${d.returnMismatch ? " · " + t("no_match") : ""}</p>
-            </div>
-            <span class="go">${t("table")}</span>
-          </a>
-          <p class="driver-key-line">${t("key")}: <b>${key || t("not_yet")}</b>
-            ${key ? `<button type="button" class="${copyKeyClass(key)}" data-act="copy-key" data-key="${key}">${copyKeyLabel(key)}</button>` : `<button type="button" class="ghost rate-btn" data-act="make-key" data-id="${d.id}">${t("make_key")}</button>`}
-          </p>
-        </div>
-      `;
-      }).join("") : `<div class="empty">${t("add_dm")}</div>`}
+      ${setupFirst ? "" : driverCardsHtml(s.byDriver.filter((d) => driverInKind(d, "market")), path)}
+      <div class="section-h" style="margin-top:18px">
+        <h2>${t("dm_order")}</h2>
+      </div>
+      ${setupFirst ? "" : driverCardsHtml(s.byDriver.filter((d) => driverInKind(d, "order")), path)}
       <div class="section-h owner-cust-head">
         <h2>${t("customers")}</h2>
         <div class="search-help">
+          ${kindToggleHtml("owner-cust-kind", custKind)}
           <input class="cust-search" data-act="cust-search" type="search" placeholder="${t("search_cust")}" value="${ownerCustQuery.replace(/"/g, "&quot;")}" autocomplete="off" />
           <button type="button" class="ghost help-inline" data-act="help-open">${t("help")}</button>
         </div>
       </div>
-      <div id="owner-cust-list">${stateCustomersList(path, range)}</div>
+      <div id="owner-cust-list">${stateCustomersList(path, range, ownerCustQuery, custKind)}</div>
       <a class="bs-cta" href="#/owner/sheet/${path}">
         <strong>${t("balance_sheet")}</strong>
       </a>
@@ -1075,39 +1507,50 @@ function shownLossHtml(path, groups, focus) {
 
 function periodJarLabel(range) {
   if (range.period === "today") return t("today_gave");
+  if (range.period === "week") return t("week_jars");
   if (range.period === "month" || range.period === "m") return t("month_jars");
   if (range.period === "year") return t("year_jars");
   return t("total_jars");
 }
 
-function stateCustomersList(path, range, q = ownerCustQuery) {
+function stateCustomersList(path, range, q = ownerCustQuery, kind = "market") {
   const { customers, drivers } = getState().owner;
-  if (!customers.length) return `<div class="empty">${t("no_cust")}</div>`;
+  const want = kind === "order" ? "order" : "market";
+  const scoped = (customers || []).filter((c) => customerRouteKind(c) === want);
+  if (!scoped.length) return `<div class="empty">${kind === "order" ? t("no_order_cust") : t("no_cust")}</div>`;
   const jarWord = periodJarLabel(range);
   const needle = String(q || "").trim().toLowerCase();
   const filtered = needle
-    ? customers.filter((c) => {
+    ? scoped.filter((c) => {
         const d = drivers.find((x) => x.id === c.device_id);
         return [c.name, c.place, d?.name].some((v) => String(v || "").toLowerCase().includes(needle));
       })
-    : customers;
+    : scoped;
   if (!filtered.length) return `<div class="empty">${t("no_cust_hit")}</div>`;
   return filtered.map((c) => {
     const d = drivers.find((x) => x.id === c.device_id);
     const rate = Number(c.jarRate) || 0;
+    const thRate = Number(c.thermosRate) || 0;
     const jars = ownerCustomerPeriodJars(c.id);
     const money = ownerCustomerMoney(c.id);
     const due = money.due;
     const dueHot = due > 0;
     const dueText = due < 0 ? `₹ ${rupee(Math.abs(due))}` : `₹ ${rupee(Math.max(0, due))}`;
     const dueLabel = due < 0 ? t("advance") : t("pending_rs");
+    const order = kind === "order";
+    const rateLine = order
+      ? (rate || thRate
+        ? `₹ ${rupee(rate)} ${t("per_jar")}${thRate ? ` · ₹ ${rupee(thRate)} ${t("per_thermos")}` : ""}`
+        : t("rate_none"))
+      : (rate ? `₹ ${rupee(rate)} ${t("per_jar")}` : t("rate_none"));
     return `
       <div class="list-item owner-cust">
         <a href="#/owner/bill/${c.id}/${path}">
           <strong>${c.name}</strong>
           ${c.place ? `<div class="muted">${c.place}</div>` : ""}
           <div class="muted">${jars} jar · ${jarWord} · ${d?.name || t("delivery_man")}</div>
-          <div class="muted">${rate ? `₹ ${rupee(rate)} ${t("per_jar")}` : t("rate_none")}</div>
+          ${order ? `<div class="muted">${t("stuck_m")} ${c.pendingJars || 0} ${t("jar")} · ${c.pendingThermos || 0} ${t("thermos_s")}</div>` : ""}
+          <div class="muted">${rateLine}</div>
         </a>
         <div class="owner-cust-side">
           <a class="money-chip ${dueHot ? "hot" : ""}" href="#/owner/bill/${c.id}/${path}">
@@ -1421,7 +1864,8 @@ function renderOwnerBill(customerId, range) {
     return;
   }
   const inv = invoiceNo(c, range);
-  const rateOk = led.rate > 0;
+  const isOrder = !!led.isOrder;
+  const rateOk = isOrder ? (led.jarRate > 0 || led.thermosRate > 0) : led.rate > 0;
   app.innerHTML = `
     ${header({ subtitle: t("bill") + " · " + c.name, date: range.to, showTimer: false })}
     <main class="wrap">
@@ -1430,7 +1874,7 @@ function renderOwnerBill(customerId, range) {
         <button type="button" class="ghost help-inline" data-act="help-open">${t("help")}</button>
       </div>
       ${ownerPeriodTabs(`#/owner/bill/${customerId}`, range)}
-      ${rateOk ? "" : `<div class="banner no-print">${t("no_rate")}</div>`}
+      ${rateOk ? "" : `<div class="banner no-print">${isOrder ? t("no_rate_order") : t("no_rate")}</div>`}
       <div class="row-btns no-print" style="margin-bottom:12px">
         <button type="button" class="ghost" data-act="edit-cust" data-id="${c.id}">${t("cust_rate")}</button>
         <button type="button" class="primary" data-act="bill-print">${t("print")}</button>
@@ -1440,7 +1884,7 @@ function renderOwnerBill(customerId, range) {
         <div class="bill-copy">ORIGINAL FOR RECIPIENT</div>
         <div class="bill-head">
           <div class="bill-brand">${getFirmName()}</div>
-          <div class="bill-tag">Packaged Drinking Water · 20 Litre Jar</div>
+          <div class="bill-tag">${isOrder ? "Packaged Drinking Water · Jar + Thermos" : "Packaged Drinking Water · 20 Litre Jar"}</div>
           <div class="bill-addr">Jalgaon, Maharashtra</div>
         </div>
         <div class="bill-title-row">
@@ -1461,24 +1905,42 @@ function renderOwnerBill(customerId, range) {
           <div>
             <div class="bill-k">From</div>
             <div class="bill-name">${getFirmName()}</div>
-            <div>20 Ltr mineral water jar supply</div>
+            <div>${isOrder ? "Jar + thermos supply" : "20 Ltr mineral water jar supply"}</div>
             <div class="muted">Jalgaon</div>
           </div>
         </div>
         <div class="bill-table-wrap">
         <table class="bill-table">
           <thead>
-            <tr>
-              <th class="num">#</th>
-              <th>${t("date")}</th>
-              <th>Particulars</th>
-              <th class="num">Qty</th>
-              <th class="num">Rate (₹)</th>
-              <th class="num">Amount (₹)</th>
-            </tr>
+            ${isOrder ? `
+              <tr>
+                <th class="num">#</th>
+                <th>${t("date")}</th>
+                <th>${t("bill_place")}</th>
+                <th class="num">${t("jar")}</th>
+                <th class="num">${t("thermos_s")}</th>
+              </tr>
+            ` : `
+              <tr>
+                <th class="num">#</th>
+                <th>${t("date")}</th>
+                <th>Particulars</th>
+                <th class="num">Qty</th>
+                <th class="num">Rate (₹)</th>
+                <th class="num">Amount (₹)</th>
+              </tr>
+            `}
           </thead>
           <tbody>
-            ${led.lines.length ? led.lines.map((l, i) => `
+            ${led.lines.length ? led.lines.map((l, i) => isOrder ? `
+              <tr>
+                <td class="num">${i + 1}</td>
+                <td>${billDate(l.date)}</td>
+                <td>${l.place || "—"}</td>
+                <td class="num">${l.jars}</td>
+                <td class="num">${l.thermos || 0}</td>
+              </tr>
+            ` : `
               <tr>
                 <td class="num">${i + 1}</td>
                 <td>${billDate(l.date)}</td>
@@ -1487,7 +1949,7 @@ function renderOwnerBill(customerId, range) {
                 <td class="num">${rupee(led.rate)}</td>
                 <td class="num">${rupee(l.jars * led.rate)}</td>
               </tr>
-            `).join("") : `<tr><td colspan="6" class="bill-empty">${t("no_del")}</td></tr>`}
+            `).join("") : `<tr><td colspan="${isOrder ? 5 : 6}" class="bill-empty">${t("no_del")}</td></tr>`}
           </tbody>
         </table>
         </div>
@@ -1497,13 +1959,24 @@ function renderOwnerBill(customerId, range) {
             <div>${inrWords(led.amount)}</div>
           </div>
           <table class="bill-totals">
-            <tr><td>Total jars</td><td>${led.jars}</td></tr>
-            <tr><td>Rate / jar</td><td>₹ ${rupee(led.rate)}</td></tr>
-            <tr class="grand"><td>Total amount</td><td>₹ ${rupee(led.amount)}</td></tr>
+            ${isOrder ? `
+              <tr><td>Total jars</td><td>${led.jars}</td></tr>
+              <tr><td>Jar rate</td><td>₹ ${rupee(led.jarRate)}</td></tr>
+              <tr><td>Jar amount</td><td>₹ ${rupee(led.jarAmount)}</td></tr>
+              <tr><td>Total thermos</td><td>${led.thermos || 0}</td></tr>
+              <tr><td>Thermos rate</td><td>₹ ${rupee(led.thermosRate)}</td></tr>
+              <tr><td>Thermos amount</td><td>₹ ${rupee(led.thermosAmount)}</td></tr>
+              <tr class="grand"><td>Total bill</td><td>₹ ${rupee(led.amount)}</td></tr>
+            ` : `
+              <tr><td>Total jars</td><td>${led.jars}</td></tr>
+              <tr><td>Rate / jar</td><td>₹ ${rupee(led.rate)}</td></tr>
+              <tr class="grand"><td>Total amount</td><td>₹ ${rupee(led.amount)}</td></tr>
+            `}
           </table>
         </div>
         <div class="bill-note">
           Empty jars pending at customer: <b>${led.pending}</b>
+          ${isOrder ? ` · Thermos pending: <b>${led.pendingThermos || 0}</b>` : ""}
           · E. &amp; O.E.
         </div>
         <div class="bill-sign">
@@ -1524,7 +1997,25 @@ function renderOwnerBill(customerId, range) {
           <div class="kpi"><b>₹ ${rupee(led.paid)}</b><span>${t("tot_got")}</span></div>
           <div class="kpi ${led.due > 0 ? "kpi-warn" : ""}"><b>₹ ${rupee(led.due)}</b><span>${led.due < 0 ? t("advance") : t("old_pending")}</span></div>
         </div>
-        <p class="muted">${t("period_line", { j: led.jars, r: rupee(led.rate), a: rupee(led.amount) })}</p>
+        <p class="muted">${isOrder
+          ? t("period_line_order", {
+              j: led.jars,
+              jr: rupee(led.jarRate),
+              ja: rupee(led.jarAmount),
+              th: led.thermos || 0,
+              tr: rupee(led.thermosRate),
+              ta: rupee(led.thermosAmount),
+              a: rupee(led.amount),
+            })
+          : t("period_line", { j: led.jars, r: rupee(led.rate), a: rupee(led.amount) })}</p>
+        <form data-form="opening" data-id="${c.id}" style="margin-bottom:14px">
+          <div class="field">
+            <label>${t("opening_dues")}</label>
+            <input name="opening" type="number" inputmode="decimal" step="1" min="0" value="${led.opening || 0}" placeholder="${t("opening_ph")}" />
+          </div>
+          <p class="muted" style="margin:6px 0 8px">${t("opening_hint", { n: rupee(led.openingLeft || 0) })}</p>
+          <button class="ghost" type="submit" style="width:100%">${t("opening_save")}</button>
+        </form>
         <form data-form="pay" data-id="${c.id}">
           <div class="pay-grid">
             <div class="field"><label>${t("amt_in")}</label><input name="amount" type="number" inputmode="decimal" step="1" min="1" required placeholder="${t("amt_ph")}" /></div>
@@ -1555,7 +2046,7 @@ function renderOwnerBill(customerId, range) {
   `;
 }
 
-function modalHtml({ title, name = "", place = "", rate = "", id = "", mode = "add", showRate = false }) {
+function modalHtml({ title, name = "", place = "", rate = "", thermosRate = "", id = "", mode = "add", showRate = false, orderRates = false }) {
   return `
     <div class="modal-bg" data-act="add-close">
       <form class="modal" data-form="${mode}" data-id="${id}">
@@ -1563,6 +2054,7 @@ function modalHtml({ title, name = "", place = "", rate = "", id = "", mode = "a
         <div class="field"><label>${t("cust_name")}</label><input name="name" required value="${name}" /></div>
         <div class="field"><label>${t("place_opt")}</label><input name="place" value="${place}" placeholder="${t("place_ph")}" /></div>
         ${showRate ? `<div class="field"><label>${t("jar_rate")}</label><input name="rate" type="number" inputmode="decimal" step="0.5" min="0" value="${rate === 0 || rate ? rate : ""}" placeholder="${t("rate_ph")}" /></div>` : ""}
+        ${showRate && orderRates ? `<div class="field"><label>${t("thermos_rate")}</label><input name="thermosRate" type="number" inputmode="decimal" step="0.5" min="0" value="${thermosRate === 0 || thermosRate ? thermosRate : ""}" placeholder="${t("rate_ph")}" /></div>` : ""}
         <div class="row-btns">
           <button type="button" class="ghost" data-act="add-close">${t("close")}</button>
           ${mode === "edit" ? `<button type="button" class="ghost" data-act="deactivate" data-id="${id}">${t("remove")}</button>` : ""}
@@ -1576,8 +2068,9 @@ function modalHtml({ title, name = "", place = "", rate = "", id = "", mode = "a
 function openAdd(prefill) {
   closeModal();
   const showRate = isOwnerRoute();
+  const orderRates = !!(showRate && prefill?.id && customerDeliveryType(getCustomer(prefill.id)) === "order");
   document.body.insertAdjacentHTML("beforeend", prefill
-    ? modalHtml({ title: showRate ? t("cust_rate") : t("cust_edit"), ...prefill, mode: "edit", showRate })
+    ? modalHtml({ title: showRate ? t("cust_rate") : t("cust_edit"), ...prefill, mode: "edit", showRate, orderRates })
     : modalHtml({ title: t("new_cust_t"), mode: "add", showRate: false }));
   document.querySelector(showRate ? ".modal input[name=rate]" : ".modal input[name=name]")?.focus();
 }
@@ -1593,6 +2086,14 @@ function openDriverModal() {
       <form class="modal" data-form="add-driver">
         <h3>${t("new_dm")}</h3>
         <div class="field"><label>${t("name")}</label><input name="name" required placeholder="Chetan" /></div>
+        <div class="field">
+          <label>${t("dm_type")}</label>
+          <select name="dtype" required>
+            <option value="market">${t("type_market")}</option>
+            <option value="order">${t("type_order")}</option>
+            <option value="both">${t("type_both")}</option>
+          </select>
+        </div>
         <p class="muted">${t("key_hint")}</p>
         <div class="row-btns">
           <button type="button" class="ghost" data-act="add-close">${t("close")}</button>
@@ -1852,6 +2353,30 @@ document.addEventListener("dblclick", (ev) => {
   if (ev.target.closest("button, .stepper, a, .card, .plant-box, .wrap")) ev.preventDefault();
 });
 
+document.addEventListener("pointerdown", (ev) => {
+  const btn = ev.target.closest("[data-act=mic-hold]");
+  if (!btn) return;
+  ev.preventDefault();
+  try { btn.setPointerCapture?.(ev.pointerId); } catch { /* ignore */ }
+  startHoldMic(btn);
+});
+
+document.addEventListener("pointerup", () => {
+  if (holdMicRec) stopHoldMic();
+});
+
+document.addEventListener("pointercancel", () => {
+  if (holdMicRec) stopHoldMic();
+});
+
+document.addEventListener("lostpointercapture", () => {
+  if (holdMicRec) stopHoldMic();
+});
+
+document.addEventListener("contextmenu", (ev) => {
+  if (ev.target.closest("[data-act=mic-hold]")) ev.preventDefault();
+});
+
 document.addEventListener("click", (ev) => {
   if (ev.target.closest("#tour-layer")) return;
   const el = ev.target.closest("[data-act]");
@@ -1863,6 +2388,44 @@ document.addEventListener("click", (ev) => {
   if (act === "help-open") {
     ev.preventDefault();
     openTour(getSession()?.role === "owner" || isOwnerRoute() ? "owner" : "driver");
+    return;
+  }
+  if (act === "owner-dash-kind") {
+    ev.preventDefault();
+    ownerDashKind = el.dataset.kind === "order" ? "order" : "market";
+    const box = document.getElementById("owner-dash-kpis");
+    if (box) {
+      const r = parseHash();
+      const range = periodRange(r.period, r.month);
+      box.innerHTML = ownerDashKpisHtml(ownerPeriodStats(), periodPath(range), ownerDashKind);
+    }
+    return;
+  }
+  if (act === "work-mode") {
+    ev.preventDefault();
+    setWorkMode(el.dataset.mode === "order" ? "order" : "market");
+    keepScroll = true;
+    run(render);
+    return;
+  }
+  if (act === "owner-cust-kind") {
+    ev.preventDefault();
+    ownerCustKind = el.dataset.kind === "order" ? "order" : "market";
+    ownerCustQuery = "";
+    const head = el.closest(".search-help");
+    if (head) {
+      head.querySelectorAll("[data-act=owner-cust-kind]").forEach((b) => {
+        b.classList.toggle("on", b.dataset.kind === ownerCustKind);
+      });
+      const input = head.querySelector(".cust-search");
+      if (input) input.value = "";
+    }
+    const list = document.getElementById("owner-cust-list");
+    if (list) {
+      const r = parseHash();
+      const range = periodRange(r.period, r.month);
+      list.innerHTML = stateCustomersList(periodPath(range), range, "", ownerCustKind);
+    }
     return;
   }
   if (act === "add-open") openAdd();
@@ -1931,8 +2494,22 @@ document.addEventListener("click", (ev) => {
     paintFast();
   }
   if (act === "bump") {
-    bump(date, id, el.dataset.field, Number(el.dataset.delta));
+    bump(date, id, el.dataset.field, Number(el.dataset.delta), el.dataset.stop);
     paintFast();
+  }
+  if (act === "stop-add") {
+    ev.preventDefault();
+    addOrderStop(date, id);
+    paintFast();
+  }
+  if (act === "stop-remove") {
+    ev.preventDefault();
+    removeOrderStop(date, id, el.dataset.stop);
+    paintFast();
+  }
+  if (act === "mic-hold") {
+    ev.preventDefault();
+    return;
   }
   if (act === "usual") {
     fillUsual(date, id);
@@ -1990,7 +2567,7 @@ document.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     const c = getCustomer(id);
-    if (c) openAdd({ name: c.name, place: c.place || "", rate: c.jarRate || 0, id: c.id });
+    if (c) openAdd({ name: c.name, place: c.place || "", rate: c.jarRate || 0, thermosRate: c.thermosRate || 0, id: c.id });
   }
   if (act === "deactivate") {
     if (confirm(t("del_cust"))) {
@@ -2035,6 +2612,11 @@ document.addEventListener("click", (ev) => {
 });
 
 document.addEventListener("input", (ev) => {
+  const drop = ev.target.closest("[data-act=drop-place]");
+  if (drop) {
+    setDropPlace(app.dataset.date || businessDate(), drop.dataset.id, drop.value, drop.dataset.stop);
+    return;
+  }
   const user = ev.target.closest("[data-act=user-check]");
   if (user) {
     const status = document.getElementById("user-status");
@@ -2072,7 +2654,12 @@ document.addEventListener("input", (ev) => {
   if (!list) return;
   const r = parseHash();
   const range = periodRange(r.period, r.month);
-  list.innerHTML = stateCustomersList(periodPath(range), range, ownerCustQuery);
+  list.innerHTML = stateCustomersList(
+    periodPath(range),
+    range,
+    ownerCustQuery,
+    ownerCustKind === "order" ? "order" : "market"
+  );
 });
 
 document.addEventListener("change", (ev) => {
@@ -2099,8 +2686,14 @@ document.addEventListener("focusout", (ev) => {
     return;
   }
   const inp = ev.target.closest("[data-act=set]");
-  if (!inp) return;
-  setCount(date, inp.dataset.id, inp.dataset.field, inp.value);
+  if (!inp) {
+    const drop = ev.target.closest("[data-act=drop-place]");
+    if (drop) {
+      setDropPlace(date, drop.dataset.id, drop.value, drop.dataset.stop);
+    }
+    return;
+  }
+  setCount(date, inp.dataset.id, inp.dataset.field, inp.value, inp.dataset.stop);
   paintFast();
 });
 
@@ -2166,7 +2759,7 @@ document.addEventListener("submit", (ev) => {
   }
   if (form.dataset.form === "add-driver") {
     run(async () => {
-      const row = await addDriverAccount(String(fd.get("name") || ""));
+      const row = await addDriverAccount(String(fd.get("name") || ""), String(fd.get("dtype") || "market"));
       closeModal();
       await copySilent(row.login_key);
       keepScroll = true;
@@ -2187,12 +2780,21 @@ document.addEventListener("submit", (ev) => {
     });
     return;
   }
+  if (form.dataset.form === "opening") {
+    run(async () => {
+      await updateCustomer(form.dataset.id, { opening: fd.get("opening") });
+      keepScroll = true;
+      await render();
+    });
+    return;
+  }
   run(async () => {
     const payload = {
       name: String(fd.get("name") || ""),
       place: String(fd.get("place") || ""),
     };
     if (fd.has("rate")) payload.rate = fd.get("rate");
+    if (fd.has("thermosRate")) payload.thermosRate = fd.get("thermosRate");
     if (form.dataset.form === "edit") await updateCustomer(form.dataset.id, payload);
     else await addCustomer(payload);
     closeModal();

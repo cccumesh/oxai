@@ -1,4 +1,4 @@
-const VERSION = "aqua-jar-v68";
+const VERSION = "aqua-jar-v78";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());

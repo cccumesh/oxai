@@ -20,6 +20,7 @@ create table if not exists sa_customers (
   sequence int not null default 0,
   pending_jars int not null default 0,
   jar_rate numeric not null default 0,
+  opening_balance numeric not null default 0,
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -31,10 +32,11 @@ create table if not exists sa_deliveries (
   work_date date not null,
   jars_given int not null default 0,
   empty_collected int not null default 0,
+  stop_no int not null default 1,
   status text not null default 'pending' check (status in ('pending', 'complete')),
   completed_at timestamptz,
   updated_at timestamptz not null default now(),
-  unique (device_id, customer_id, work_date)
+  unique (device_id, customer_id, work_date, stop_no)
 );
 
 create table if not exists sa_day_trips (
@@ -75,6 +77,7 @@ create table if not exists sa_orgs (
 -- 2) Purani table par missing columns (data safe)
 alter table sa_customers add column if not exists place text default '';
 alter table sa_customers add column if not exists jar_rate numeric not null default 0;
+alter table sa_customers add column if not exists opening_balance numeric not null default 0;
 alter table sa_day_trips add column if not exists filled_out int not null default 0;
 alter table sa_day_trips add column if not exists filled_back int not null default 0;
 alter table sa_day_trips add column if not exists waste_jars int not null default 0;
@@ -84,9 +87,21 @@ alter table sa_day_trips add column if not exists rokda_jars int not null defaul
 alter table sa_day_trips add column if not exists returned_jars int not null default 0;
 alter table sa_devices add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
 alter table sa_devices add column if not exists login_key text default '';
+alter table sa_devices add column if not exists delivery_type text not null default 'market';
 alter table sa_customers add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
+alter table sa_customers add column if not exists opening_balance numeric not null default 0;
+alter table sa_customers add column if not exists pending_thermos int not null default 0;
+alter table sa_customers add column if not exists thermos_rate numeric not null default 0;
+alter table sa_customers add column if not exists route_kind text not null default 'market';
 alter table sa_deliveries add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
+alter table sa_deliveries add column if not exists thermos_given int not null default 0;
+alter table sa_deliveries add column if not exists thermos_collected int not null default 0;
+alter table sa_deliveries add column if not exists drop_place text default '';
+alter table sa_deliveries add column if not exists stop_no int not null default 1;
+alter table sa_deliveries drop constraint if exists sa_deliveries_device_id_customer_id_work_date_key;
 alter table sa_day_trips add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
+alter table sa_day_trips add column if not exists thermos_out int not null default 0;
+alter table sa_day_trips add column if not exists thermos_back int not null default 0;
 alter table sa_payments add column if not exists org_id uuid references sa_orgs(id) on delete cascade;
 
 create table if not exists sa_sessions (
@@ -102,6 +117,8 @@ create table if not exists sa_sessions (
 create index if not exists sa_customers_device_seq on sa_customers (device_id, sequence);
 create index if not exists sa_deliveries_date on sa_deliveries (work_date);
 create index if not exists sa_deliveries_device_date on sa_deliveries (device_id, work_date);
+create unique index if not exists sa_deliveries_device_cust_date_stop
+  on sa_deliveries (device_id, customer_id, work_date, stop_no);
 create index if not exists sa_day_trips_date on sa_day_trips (work_date);
 create index if not exists sa_payments_customer on sa_payments (customer_id);
 create unique index if not exists sa_orgs_username on sa_orgs (username);

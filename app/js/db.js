@@ -1,7 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { getSupabaseUrl, getSupabaseAnonKey, hasSupabaseConfig } from "./config.js";
-import { getSession } from "./auth.js?v=68";
-import { t, serverMsg } from "./i18n.js?v=68";
+import { getSession } from "./auth.js?v=78";
+import { t, serverMsg } from "./i18n.js?v=78";
 
 let client = null;
 let authToken = "";
@@ -221,12 +221,13 @@ export async function insertCustomer(row) {
 
 export async function updateCustomerRow(id, patch) {
   const payload = { ...patch };
-  const wantRate = Object.prototype.hasOwnProperty.call(payload, "jar_rate");
+  const wantRate = Object.prototype.hasOwnProperty.call(payload, "jar_rate")
+    || Object.prototype.hasOwnProperty.call(payload, "thermos_rate");
   for (let i = 0; i < 6; i++) {
     const res = await getClient().from("sa_customers").update(payload).eq("id", id).select().single();
     if (!res.error) return res.data;
     const missing = String(res.error.message || "").match(/Could not find the '([^']+)' column/);
-    if (missing?.[1] === "jar_rate" && wantRate) {
+    if ((missing?.[1] === "jar_rate" || missing?.[1] === "thermos_rate") && wantRate) {
       throw new Error(t("err_rsave"));
     }
     if (missing && missing[1] in payload) {
@@ -276,7 +277,7 @@ export async function listTripsRange(fromDate, toDate, deviceId, orgId) {
 export async function listDeliveryJarRows(orgId) {
   let q = getClient()
     .from("sa_deliveries")
-    .select("customer_id, jars_given")
+    .select("customer_id, jars_given, thermos_given")
     .eq("status", "complete")
     .limit(20000);
   if (orgId) q = q.eq("org_id", orgId);
@@ -320,13 +321,48 @@ export async function deletePayment(id) {
 }
 
 export async function upsertDelivery(row) {
-  return ok(
-    await getClient()
+  const payload = { ...row };
+  if (payload.stop_no == null) payload.stop_no = 1;
+  for (let i = 0; i < 8; i++) {
+    const conflict = "stop_no" in payload
+      ? "device_id,customer_id,work_date,stop_no"
+      : "device_id,customer_id,work_date";
+    const res = await getClient()
       .from("sa_deliveries")
-      .upsert(row, { onConflict: "device_id,customer_id,work_date" })
+      .upsert(payload, { onConflict: conflict })
       .select()
-      .single()
-  );
+      .single();
+    if (!res.error) return res.data;
+    const missing = String(res.error.message || "").match(/Could not find the '([^']+)' column/);
+    if (missing && missing[1] in payload) {
+      delete payload[missing[1]];
+      continue;
+    }
+    // Purana unique (bina stop_no) — ek row pe fallback
+    if (/no unique|ON CONFLICT|exclusion/i.test(String(res.error.message || "")) && "stop_no" in payload) {
+      if (Number(payload.stop_no) > 1) {
+        throw new Error(t("err_multistop"));
+      }
+      delete payload.stop_no;
+      continue;
+    }
+    throw new Error(serverMsg(res.error.message));
+  }
+  throw new Error(serverMsg("delivery save failed"));
+}
+
+export async function deleteExtraDeliveryStops(deviceId, customerId, workDate, keepStopNos) {
+  const keep = (keepStopNos || []).map(Number).filter((n) => n > 0);
+  let q = getClient()
+    .from("sa_deliveries")
+    .delete()
+    .eq("device_id", deviceId)
+    .eq("customer_id", customerId)
+    .eq("work_date", workDate);
+  if (keep.length) q = q.not("stop_no", "in", `(${keep.join(",")})`);
+  const res = await q;
+  if (res.error && /stop_no/i.test(String(res.error.message || ""))) return;
+  if (res.error) throw new Error(serverMsg(res.error.message));
 }
 
 export async function deliveryDates(deviceId) {
@@ -339,7 +375,7 @@ export async function deliveryDates(deviceId) {
 export async function listCompleteDeliveries(orgId) {
   let q = getClient()
     .from("sa_deliveries")
-    .select("customer_id, device_id, work_date, jars_given, empty_collected, completed_at, status")
+    .select("customer_id, device_id, work_date, jars_given, empty_collected, thermos_given, thermos_collected, completed_at, status")
     .eq("status", "complete")
     .order("work_date", { ascending: true })
     .order("completed_at", { ascending: true })
@@ -352,15 +388,23 @@ export async function recomputePending(customerId) {
   const rows = ok(
     await getClient()
       .from("sa_deliveries")
-      .select("jars_given, empty_collected, work_date, completed_at, status")
+      .select("jars_given, empty_collected, thermos_given, thermos_collected, work_date, completed_at, status")
       .eq("customer_id", customerId)
       .eq("status", "complete")
       .order("work_date", { ascending: true })
       .order("completed_at", { ascending: true })
   );
-  const { pending } = runJarLedger(rows || []);
-  await updateCustomerRow(customerId, { pending_jars: pending });
-  return pending;
+  const list = rows || [];
+  const { pending } = runJarLedger(list);
+  const { pending: pendingThermos } = runJarLedger(
+    list.map((r) => ({
+      ...r,
+      jars_given: r.thermos_given || 0,
+      empty_collected: r.thermos_collected || 0,
+    }))
+  );
+  await updateCustomerRow(customerId, { pending_jars: pending, pending_thermos: pendingThermos });
+  return { pending, pendingThermos };
 }
 
 /** Running shop ledger: pending never negative; surplus empties = extra. */

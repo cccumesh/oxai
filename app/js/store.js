@@ -1,7 +1,7 @@
 import { SETTINGS } from "./seed.js";
-import * as db from "./db.js?v=68";
-import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=68";
-import { t, dateLocale } from "./i18n.js?v=68";
+import * as db from "./db.js?v=78";
+import { getSession, setSession, clearSession, makeDriverKey, normalizeUsername, getPhoneId } from "./auth.js?v=78";
+import { t, dateLocale } from "./i18n.js?v=78";
 
 const DEVICE_KEY = "sa-device-id";
 const SETTINGS_KEY = "sanjay-aqua-settings";
@@ -29,15 +29,106 @@ export function displayDate(str) {
   });
 }
 
-function emptyEntry(customer) {
+function emptyStop(stopNo = 1) {
   return {
-    customerId: customer.id,
-    driverId: customer.device_id,
+    stopNo: Number(stopNo) || 1,
     jarsGiven: 0,
     emptyCollected: 0,
+    thermosGiven: 0,
+    thermosCollected: 0,
+    dropPlace: "",
+  };
+}
+
+function syncEntryFromStops(e) {
+  if (!e) return e;
+  if (!Array.isArray(e.stops) || !e.stops.length) {
+    e.stops = [emptyStop(1)];
+  }
+  e.stops.sort((a, b) => (a.stopNo || 0) - (b.stopNo || 0));
+  e.jarsGiven = e.stops.reduce((s, x) => s + (Number(x.jarsGiven) || 0), 0);
+  e.emptyCollected = e.stops.reduce((s, x) => s + (Number(x.emptyCollected) || 0), 0);
+  e.thermosGiven = e.stops.reduce((s, x) => s + (Number(x.thermosGiven) || 0), 0);
+  e.thermosCollected = e.stops.reduce((s, x) => s + (Number(x.thermosCollected) || 0), 0);
+  e.dropPlace = e.stops.map((x) => String(x.dropPlace || "").trim()).filter(Boolean).join(" · ");
+  return e;
+}
+
+function ensureStops(e) {
+  if (!e) return null;
+  if (!Array.isArray(e.stops) || !e.stops.length) {
+    e.stops = [{
+      stopNo: 1,
+      jarsGiven: Number(e.jarsGiven) || 0,
+      emptyCollected: Number(e.emptyCollected) || 0,
+      thermosGiven: Number(e.thermosGiven) || 0,
+      thermosCollected: Number(e.thermosCollected) || 0,
+      dropPlace: e.dropPlace || "",
+    }];
+  }
+  return syncEntryFromStops(e);
+}
+
+function getStop(e, stopNo) {
+  ensureStops(e);
+  const n = Number(stopNo) || 1;
+  return e.stops.find((s) => Number(s.stopNo) === n) || e.stops[0];
+}
+
+function emptyEntry(customer) {
+  const e = {
+    customerId: customer.id,
+    driverId: customer.device_id,
+    stops: [emptyStop(1)],
     status: "pending",
     completedAt: null,
   };
+  return syncEntryFromStops(e);
+}
+
+function entryFromRows(customer, rows) {
+  const list = (rows || []).slice().sort((a, b) => (a.stop_no || 1) - (b.stop_no || 1));
+  if (!list.length) return emptyEntry(customer);
+  const stops = list.map((r) => ({
+    stopNo: r.stop_no || 1,
+    jarsGiven: r.jars_given || 0,
+    emptyCollected: r.empty_collected || 0,
+    thermosGiven: r.thermos_given || 0,
+    thermosCollected: r.thermos_collected || 0,
+    dropPlace: r.drop_place || "",
+  }));
+  const top = list.every((r) => r.status === "complete") ? list[list.length - 1] : list.find((r) => r.status !== "complete") || list[0];
+  const e = {
+    customerId: customer.id,
+    driverId: customer.device_id,
+    stops,
+    status: list.every((r) => r.status === "complete") ? "complete" : "pending",
+    completedAt: top.completed_at ? new Date(top.completed_at).getTime() : null,
+  };
+  return syncEntryFromStops(e);
+}
+
+function entryStamp(e) {
+  ensureStops(e);
+  return JSON.stringify({
+    status: e.status,
+    completedAt: e.completedAt,
+    stops: e.stops,
+  });
+}
+
+function buildDay(dateStr, customers, rows) {
+  const entries = {};
+  const routeOrder = [];
+  const byCust = {};
+  for (const r of rows || []) {
+    (byCust[r.customer_id] ||= []).push(r);
+  }
+  for (const c of customers) {
+    entries[c.id] = entryFromRows(c, byCust[c.id] || []);
+    routeOrder.push(c.id);
+  }
+  return { date: dateStr, entries, routeOrder: { self: routeOrder } };
 }
 
 function loadSettings() {
@@ -127,28 +218,6 @@ export function dayWindow(dateStr) {
 export function remainingMs(dateStr, now = new Date()) {
   const { end } = dayWindow(dateStr);
   return end.getTime() - now.getTime();
-}
-
-function buildDay(dateStr, customers, rows) {
-  const entries = {};
-  const routeOrder = [];
-  const byKey = {};
-  for (const r of rows || []) byKey[r.customer_id] = r;
-  for (const c of customers) {
-    const r = byKey[c.id];
-    entries[c.id] = r
-      ? {
-          customerId: c.id,
-          driverId: c.device_id,
-          jarsGiven: r.jars_given || 0,
-          emptyCollected: r.empty_collected || 0,
-          status: r.status || "pending",
-          completedAt: r.completed_at ? new Date(r.completed_at).getTime() : null,
-        }
-      : emptyEntry(c);
-    routeOrder.push(c.id);
-  }
-  return { date: dateStr, entries, routeOrder: { self: routeOrder } };
 }
 
 export async function load(opts = {}) {
@@ -247,12 +316,17 @@ function mapTrip(trip) {
     brokeJars: trip?.broke_jars || 0,
     rokdaJars: trip?.rokda_jars || 0,
     returnedJars: trip?.returned_jars || 0,
+    thermosOut: trip?.thermos_out || 0,
+    thermosBack: trip?.thermos_back || 0,
     loadConfirmed: false,
   };
 }
 
 function emptyTrip() {
-  return { filledOut: 0, filledBack: 0, wasteJars: 0, leakJars: 0, brokeJars: 0, rokdaJars: 0, returnedJars: 0, loadConfirmed: false };
+  return {
+    filledOut: 0, filledBack: 0, wasteJars: 0, leakJars: 0, brokeJars: 0,
+    rokdaJars: 0, returnedJars: 0, thermosOut: 0, thermosBack: 0, loadConfirmed: false,
+  };
 }
 
 export function tripLoss(trip) {
@@ -306,10 +380,21 @@ function syncPendingFromLedger() {
     (byCust[r.customer_id] || (byCust[r.customer_id] = [])).push(r);
   }
   for (const c of state.owner.customers || []) {
-    const { pending } = db.runJarLedger(byCust[c.id] || []);
-    if (pending === (c.pendingJars || 0)) continue;
+    const list = byCust[c.id] || [];
+    const { pending } = db.runJarLedger(list);
+    const { pending: pendingThermos } = db.runJarLedger(
+      list.map((r) => ({
+        ...r,
+        jars_given: r.thermos_given || 0,
+        empty_collected: r.thermos_collected || 0,
+      }))
+    );
+    const jarSame = pending === (c.pendingJars || 0);
+    const thSame = pendingThermos === (c.pendingThermos || 0);
+    if (jarSame && thSame) continue;
     c.pendingJars = pending;
-    db.updateCustomerRow(c.id, { pending_jars: pending }).catch(() => {});
+    c.pendingThermos = pendingThermos;
+    db.updateCustomerRow(c.id, { pending_jars: pending, pending_thermos: pendingThermos }).catch(() => {});
   }
 }
 
@@ -341,14 +426,35 @@ export function ownerCustomerPeriodJars(customerId) {
 }
 
 export function ownerCustomerMoney(customerId) {
-  const rate = Number(getCustomer(customerId)?.jarRate) || 0;
-  const jarsAll = (state.owner.allJarRows || [])
-    .filter((r) => r.customer_id === customerId)
-    .reduce((s, r) => s + (Number(r.jars_given) || 0), 0);
-  const billed = jarsAll * rate;
+  const c = getCustomer(customerId);
+  const jarRate = Number(c?.jarRate) || 0;
+  const thermosRate = Number(c?.thermosRate) || 0;
+  const rows = (state.owner.allJarRows || []).filter((r) => r.customer_id === customerId);
+  const jarsAll = rows.reduce((s, r) => s + (Number(r.jars_given) || 0), 0);
+  const thermosAll = rows.reduce((s, r) => s + (Number(r.thermos_given) || 0), 0);
+  const jarBilled = jarsAll * jarRate;
+  const thermosBilled = thermosAll * thermosRate;
+  const billed = jarBilled + thermosBilled;
   const payments = (state.owner.payments || []).filter((p) => p.customer_id === customerId);
   const paid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
-  return { jarsAll, billed, paid, due: billed - paid, payments };
+  const opening = Math.max(0, Number(c?.openingBalance) || 0);
+  const appNet = billed - paid;
+  const due = appNet + opening;
+  const openingLeft = Math.max(0, opening + Math.min(0, appNet));
+  return {
+    jarsAll,
+    thermosAll,
+    jarRate,
+    thermosRate,
+    jarBilled,
+    thermosBilled,
+    billed,
+    paid,
+    due,
+    opening,
+    openingLeft,
+    payments,
+  };
 }
 
 export function monthLabel(ym) {
@@ -374,9 +480,12 @@ export function ownerBalanceSheet(range) {
   for (const r of state.owner.rangeDeliveries || []) {
     if (r.status !== "complete") continue;
     const jars = Number(r.jars_given) || 0;
-    const rate = Number(getCustomer(r.customer_id)?.jarRate) || 0;
+    const thermos = Number(r.thermos_given) || 0;
+    const cust = getCustomer(r.customer_id);
+    const jarRate = Number(cust?.jarRate) || 0;
+    const thermosRate = Number(cust?.thermosRate) || 0;
     periodJars += jars;
-    periodSales += jars * rate;
+    periodSales += jars * jarRate + thermos * thermosRate;
   }
 
   const periodPays = (state.owner.payments || [])
@@ -472,7 +581,10 @@ async function loadOwner(dateStr) {
   await loadOwnerRange(from, dateStr);
 }
 
-const TRIP_FIELDS = new Set(["filledOut", "filledBack", "wasteJars", "leakJars", "brokeJars", "rokdaJars", "returnedJars"]);
+const TRIP_FIELDS = new Set([
+  "filledOut", "filledBack", "wasteJars", "leakJars", "brokeJars",
+  "rokdaJars", "returnedJars", "thermosOut", "thermosBack",
+]);
 
 function loadOkKey(dateStr) {
   return `sa-load-ok:${state.device?.id || "x"}:${dateStr}`;
@@ -491,7 +603,12 @@ function writeLoadOk(dateStr, on) {
 
 function routeAlreadyStarted(dateStr) {
   return Object.values(getDay(dateStr).entries || {}).some(
-    (e) => e.status === "complete" || (e.jarsGiven || 0) > 0 || (e.emptyCollected || 0) > 0
+    (e) =>
+      e.status === "complete" ||
+      (e.jarsGiven || 0) > 0 ||
+      (e.emptyCollected || 0) > 0 ||
+      (e.thermosGiven || 0) > 0 ||
+      (e.thermosCollected || 0) > 0
   );
 }
 
@@ -517,13 +634,16 @@ export function confirmLoad(dateStr) {
 export function vehicleStock(dateStr) {
   const trip = getTrip(dateStr);
   const day = getDay(dateStr);
-  const delivered = Object.values(day.entries || {})
-    .filter((e) => e.status === "complete")
-    .reduce((s, e) => s + (e.jarsGiven || 0), 0);
+  const complete = Object.values(day.entries || {}).filter((e) => e.status === "complete");
+  const delivered = complete.reduce((s, e) => s + (e.jarsGiven || 0), 0);
+  const thermosDelivered = complete.reduce((s, e) => s + (e.thermosGiven || 0), 0);
+  const thermosPicked = complete.reduce((s, e) => s + (e.thermosCollected || 0), 0);
   const rokda = Number(trip.rokdaJars) || 0;
   const loss = tripLoss(trip);
   const sold = delivered + rokda;
   const remaining = trip.filledOut - sold - loss.leak - loss.broke;
+  const thermosOut = Number(trip.thermosOut) || 0;
+  const thermosRemaining = thermosOut - thermosDelivered;
   return {
     filledOut: trip.filledOut,
     delivered,
@@ -536,6 +656,11 @@ export function vehicleStock(dateStr) {
     remaining,
     filledBack: trip.filledBack,
     returned: trip.returnedJars || 0,
+    thermosOut,
+    thermosDelivered,
+    thermosPicked,
+    thermosRemaining,
+    thermosBack: trip.thermosBack || 0,
   };
 }
 
@@ -547,6 +672,7 @@ export function returnExpect(dateStr) {
   const leakEmpty = stock.leak || 0;
   const emptyShould = shopEmpty + leakEmpty;
   const extraShop = shopEmpty - stock.sold;
+  const thermosShould = Math.max(0, stock.thermosRemaining) + (stock.thermosPicked || 0);
   return {
     ...stock,
     emptyCollected: shopEmpty,
@@ -557,6 +683,7 @@ export function returnExpect(dateStr) {
     emptyShould,
     totalShould: filledShould + emptyShould,
     returned: stock.returned || 0,
+    thermosShould,
   };
 }
 
@@ -586,9 +713,14 @@ function queuePersistEntry(dateStr, customerId, afterSave) {
 }
 
 async function refreshPendingAndWapas(dateStr, customerId) {
-  const pending = Math.max(0, await db.recomputePending(customerId));
+  const out = await db.recomputePending(customerId);
+  const pending = Math.max(0, typeof out === "object" ? out.pending : out);
+  const pendingThermos = Math.max(0, typeof out === "object" ? out.pendingThermos : 0);
   const c = getCustomer(customerId);
-  if (c) c.pendingJars = pending;
+  if (c) {
+    c.pendingJars = pending;
+    c.pendingThermos = pendingThermos;
+  }
   await syncWapasFromStock(dateStr);
 }
 
@@ -659,6 +791,8 @@ async function persistTrip(dateStr) {
       broke_jars: trip.brokeJars || 0,
       rokda_jars: trip.rokdaJars || 0,
       returned_jars: trip.returnedJars || 0,
+      thermos_out: trip.thermosOut || 0,
+      thermos_back: trip.thermosBack || 0,
       waste_jars: loss.total,
     });
     if (JSON.stringify(getTrip(dateStr)) === stamp) break;
@@ -675,7 +809,11 @@ function mapCustomer(c) {
     place: c.place || "",
     routeOrder: c.sequence,
     pendingJars: Math.max(0, c.pending_jars || 0),
+    pendingThermos: Math.max(0, c.pending_thermos || 0),
     jarRate: Number(c.jar_rate) || 0,
+    thermosRate: Math.max(0, Number(c.thermos_rate) || 0),
+    openingBalance: Math.max(0, Number(c.opening_balance) || 0),
+    routeKind: c.route_kind === "order" ? "order" : c.route_kind === "market" ? "market" : (c.route_kind || ""),
     active: c.active,
   };
 }
@@ -759,19 +897,21 @@ export async function loginDriverAccount({ username, key }) {
   return getSession();
 }
 
-export async function addDriverAccount(name) {
+export async function addDriverAccount(name, deliveryType = "market") {
   const oid = orgId();
   if (!oid) throw new Error(t("err_own"));
   const key = makeDriverKey();
+  const type = deliveryType === "order" ? "order" : deliveryType === "both" ? "both" : "market";
   const row = await db.insertDevice({
     id: crypto.randomUUID(),
     name: String(name || "").trim(),
     role: "driver",
     org_id: oid,
     login_key: key,
+    delivery_type: type,
   });
   state.owner.drivers = [...(state.owner.drivers || []), row];
-  return { ...row, login_key: key };
+  return { ...row, login_key: key, delivery_type: type };
 }
 
 export async function ensureDriverKey(driverId) {
@@ -798,8 +938,73 @@ export async function logout() {
 
 export function getDriver() {
   return state.device
-    ? { id: state.device.id, name: state.device.name, color: "#0891b2" }
+    ? {
+        id: state.device.id,
+        name: state.device.name,
+        color: "#0891b2",
+        deliveryType: currentWorkMode(state.device),
+        baseType: deviceBaseType(state.device),
+      }
     : null;
+}
+
+function workModeKey() {
+  const id = state.device?.id || getSession()?.deviceId || "x";
+  return `sa_work_mode_${id}`;
+}
+
+export function deviceBaseType(device = state.device) {
+  const raw = device?.delivery_type || device?.deliveryType || "market";
+  if (raw === "order") return "order";
+  if (raw === "both") return "both";
+  return "market";
+}
+
+/** Active Daily vs Order screen (switch). */
+export function currentWorkMode(device = state.device) {
+  try {
+    const saved = localStorage.getItem(workModeKey());
+    if (saved === "order" || saved === "market") return saved;
+  } catch { /* ignore */ }
+  const base = deviceBaseType(device);
+  return base === "order" ? "order" : "market";
+}
+
+export function setWorkMode(mode) {
+  const next = mode === "order" ? "order" : "market";
+  try { localStorage.setItem(workModeKey(), next); } catch { /* ignore */ }
+  return next;
+}
+
+export function deviceDeliveryType(device) {
+  const base = deviceBaseType(device);
+  if (base === "both") return "both";
+  return base === "order" ? "order" : "market";
+}
+
+export function isOrderDriver(device = state.device) {
+  return currentWorkMode(device) === "order";
+}
+
+export function customerRouteKind(c) {
+  const k = c?.routeKind || c?.route_kind;
+  if (k === "order" || k === "market") return k;
+  const drivers = state.owner.drivers || [];
+  const d = drivers.find((x) => x.id === (c?.device_id || c?.driverId)) || state.device;
+  const base = deviceBaseType(d);
+  return base === "order" ? "order" : "market";
+}
+
+export function customerDeliveryType(c) {
+  return customerRouteKind(c);
+}
+
+export function modeCustomers(mode = currentWorkMode()) {
+  return (state.customers || []).filter((c) => customerRouteKind(c) === mode);
+}
+
+export function modeCustomerIds(mode = currentWorkMode()) {
+  return new Set(modeCustomers(mode).map((c) => c.id));
 }
 
 export async function renameDriver(name) {
@@ -817,19 +1022,25 @@ export function getDay(dateStr) {
 
 export function pendingIds(dateStr) {
   const day = getDay(dateStr);
-  return (day.routeOrder.self || []).filter((id) => day.entries[id]?.status !== "complete");
+  const ids = modeCustomerIds();
+  return (day.routeOrder.self || []).filter(
+    (id) => ids.has(id) && day.entries[id]?.status !== "complete"
+  );
 }
 
 export function completeIds(dateStr) {
   const day = getDay(dateStr);
+  const ids = modeCustomerIds();
   return Object.values(day.entries)
-    .filter((e) => e.status === "complete")
+    .filter((e) => e.status === "complete" && ids.has(e.customerId))
     .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0))
     .map((e) => e.customerId);
 }
 
 export function routeIds(dateStr) {
-  return getDay(dateStr).routeOrder.self || state.customers.map((c) => c.id);
+  const ids = modeCustomerIds();
+  const ordered = getDay(dateStr).routeOrder.self || state.customers.map((c) => c.id);
+  return ordered.filter((id) => ids.has(id));
 }
 
 async function persistEntry(dateStr, customerId) {
@@ -837,37 +1048,61 @@ async function persistEntry(dateStr, customerId) {
   const c = getCustomer(customerId);
   const e = getDay(dateStr).entries[customerId];
   if (!c || !e || !state.device) return;
+  ensureStops(e);
   for (let i = 0; i < 4; i++) {
-    const stamp = `${e.jarsGiven}|${e.emptyCollected}|${e.status}|${e.completedAt}`;
-    await db.upsertDelivery({
-      device_id: state.device.id,
-      org_id: orgId(),
-      customer_id: customerId,
-      work_date: dateStr,
-      jars_given: e.jarsGiven,
-      empty_collected: e.emptyCollected,
-      status: e.status,
-      completed_at: e.completedAt ? new Date(e.completedAt).toISOString() : null,
-      updated_at: new Date().toISOString(),
-    });
+    const stamp = entryStamp(e);
+    const stops = e.stops.slice();
+    for (const s of stops) {
+      await db.upsertDelivery({
+        device_id: state.device.id,
+        org_id: orgId(),
+        customer_id: customerId,
+        work_date: dateStr,
+        stop_no: s.stopNo || 1,
+        jars_given: s.jarsGiven || 0,
+        empty_collected: s.emptyCollected || 0,
+        thermos_given: s.thermosGiven || 0,
+        thermos_collected: s.thermosCollected || 0,
+        drop_place: s.dropPlace || "",
+        status: e.status,
+        completed_at: e.completedAt ? new Date(e.completedAt).toISOString() : null,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    try {
+      await db.deleteExtraDeliveryStops(
+        state.device.id,
+        customerId,
+        dateStr,
+        stops.map((s) => s.stopNo || 1)
+      );
+    } catch (err) {
+      console.error(err);
+    }
     const n = getDay(dateStr).entries[customerId];
-    if (!n || `${n.jarsGiven}|${n.emptyCollected}|${n.status}|${n.completedAt}` === stamp) break;
+    if (!n || entryStamp(n) === stamp) break;
   }
 }
 
-export function bump(dateStr, customerId, field, delta) {
+export function bump(dateStr, customerId, field, delta, stopNo) {
   if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
   if (!e) return;
-  e[field] = Math.max(0, Math.min(999, (e[field] || 0) + delta));
+  const s = getStop(e, stopNo);
+  if (!s) return;
+  s[field] = Math.max(0, Math.min(999, (Number(s[field]) || 0) + Number(delta)));
+  syncEntryFromStops(e);
   queuePersistEntry(dateStr, customerId);
 }
 
-export function setCount(dateStr, customerId, field, value) {
+export function setCount(dateStr, customerId, field, value, stopNo) {
   if (!canEditWorkDate(dateStr)) return;
   const e = getDay(dateStr).entries[customerId];
   if (!e) return;
-  e[field] = Math.max(0, Math.min(999, Number(value) || 0));
+  const s = getStop(e, stopNo);
+  if (!s) return;
+  s[field] = Math.max(0, Math.min(999, Number(value) || 0));
+  syncEntryFromStops(e);
   queuePersistEntry(dateStr, customerId);
 }
 
@@ -876,7 +1111,9 @@ export function fillUsual(dateStr, customerId) {
   const c = getCustomer(customerId);
   const e = getDay(dateStr).entries[customerId];
   if (!c || !e) return;
-  e.jarsGiven = c.usualJars || 1;
+  const s = getStop(e, 1);
+  s.jarsGiven = c.usualJars || 1;
+  syncEntryFromStops(e);
   queuePersistEntry(dateStr, customerId);
 }
 
@@ -885,10 +1122,16 @@ export function markComplete(dateStr, customerId) {
   const e = getDay(dateStr).entries[customerId];
   const c = getCustomer(customerId);
   if (!e || e.status === "complete") return;
+  ensureStops(e);
+  syncEntryFromStops(e);
   e.status = "complete";
   e.completedAt = Date.now();
   e._pendingBefore = Math.max(0, c?.pendingJars || 0);
-  if (c) c.pendingJars = stopMarketPreview(c, e).after;
+  e._pendingThermosBefore = Math.max(0, c?.pendingThermos || 0);
+  if (c) {
+    c.pendingJars = stopMarketPreview(c, e).after;
+    c.pendingThermos = stopThermosPreview(c, e).after;
+  }
   syncWapasLocal(dateStr);
   queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
 }
@@ -898,8 +1141,12 @@ export function markPending(dateStr, customerId) {
   const e = getDay(dateStr).entries[customerId];
   const c = getCustomer(customerId);
   if (!e || e.status !== "complete") return;
-  if (c && e._pendingBefore != null) c.pendingJars = Math.max(0, e._pendingBefore);
+  if (c) {
+    if (e._pendingBefore != null) c.pendingJars = Math.max(0, e._pendingBefore);
+    if (e._pendingThermosBefore != null) c.pendingThermos = Math.max(0, e._pendingThermosBefore);
+  }
   delete e._pendingBefore;
+  delete e._pendingThermosBefore;
   e.status = "pending";
   e.completedAt = null;
   queuePersistEntry(dateStr, customerId, () => refreshPendingAndWapas(dateStr, customerId));
@@ -942,6 +1189,7 @@ export async function moveSequence(dateStr, _driverId, customerId, dir) {
 
 export async function addCustomer({ name, place }) {
   const deviceId = state.device.id;
+  const kind = currentWorkMode();
   const row = await db.insertCustomer({
     device_id: deviceId,
     org_id: orgId(),
@@ -951,9 +1199,11 @@ export async function addCustomer({ name, place }) {
     sequence: state.customers.length,
     pending_jars: 0,
     jar_rate: 0,
+    route_kind: kind,
     active: true,
   });
   const mapped = mapCustomer(row);
+  if (!mapped.routeKind) mapped.routeKind = kind;
   state.customers.push(mapped);
   const today = businessDate();
   if (!state.days[today]) state.days[today] = buildDay(today, state.customers, []);
@@ -973,6 +1223,12 @@ export async function updateCustomer(id, patch) {
   if (patch.rate != null && patch.rate !== "") {
     body.jar_rate = Math.max(0, Number(patch.rate) || 0);
   }
+  if (patch.thermosRate != null && patch.thermosRate !== "") {
+    body.thermos_rate = Math.max(0, Number(patch.thermosRate) || 0);
+  }
+  if (patch.opening != null && patch.opening !== "") {
+    body.opening_balance = Math.max(0, Number(patch.opening) || 0);
+  }
   const row = await db.updateCustomerRow(id, body);
   Object.assign(c, mapCustomer(row));
 }
@@ -985,15 +1241,20 @@ export async function deactivateCustomer(id) {
 
 export function dayStats(dateStr) {
   const day = getDay(dateStr);
-  const entries = Object.values(day.entries || {});
+  const ids = modeCustomerIds();
+  const entries = Object.values(day.entries || {}).filter((e) => ids.has(e.customerId));
   const complete = entries.filter((e) => e.status === "complete");
+  const modeCust = modeCustomers();
   return {
     total: entries.length,
     done: complete.length,
     pending: entries.filter((e) => e.status !== "complete").length,
     jars: complete.reduce((s, e) => s + (e.jarsGiven || 0), 0),
     empty: complete.reduce((s, e) => s + (e.emptyCollected || 0), 0),
-    marketPending: state.customers.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
+    thermos: complete.reduce((s, e) => s + (e.thermosGiven || 0), 0),
+    thermosEmpty: complete.reduce((s, e) => s + (e.thermosCollected || 0), 0),
+    marketPending: modeCust.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
+    thermosPending: modeCust.reduce((s, c) => s + Math.max(0, c.pendingThermos || 0), 0),
   };
 }
 
@@ -1028,6 +1289,11 @@ export function periodRange(period = "today", monthKey = "") {
   const y = d.getFullYear();
   const m = pad(d.getMonth() + 1);
   if (period === "today") return { from: today, to: today, label: t("today"), period: "today" };
+  if (period === "week") {
+    const start = parseDate(today);
+    start.setDate(start.getDate() - 6);
+    return { from: formatDate(start), to: today, label: t("week"), period: "week" };
+  }
   if (period === "month") {
     return {
       from: `${y}-${m}-01`,
@@ -1133,22 +1399,31 @@ export function ownerPeriodStats() {
   const deliveries = (state.owner.rangeDeliveries || []).filter((r) => r.status === "complete");
   const trips = state.owner.rangeTrips || [];
   const pendingMarket = state.owner.customers.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0);
+  const pendingThermos = state.owner.customers.reduce((s, c) => s + Math.max(0, c.pendingThermos || 0), 0);
   const byDriver = state.owner.drivers.map((d) => {
     const rows = deliveries.filter((r) => r.device_id === d.id);
     const dTrips = trips.filter((t) => t.device_id === d.id);
     const cust = state.owner.customers.filter((c) => c.device_id === d.id);
+    const dtype = deviceDeliveryType(d);
     return {
       id: d.id,
       name: d.name,
+      deliveryType: dtype,
+      baseType: deviceBaseType(d),
       jars: sumField(rows, "jars_given"),
       empty: sumField(rows, "empty_collected"),
+      thermos: sumField(rows, "thermos_given"),
+      thermosEmpty: sumField(rows, "thermos_collected"),
       filledOut: sumField(dTrips, "filled_out"),
+      thermosOut: sumField(dTrips, "thermos_out"),
       filledBack: sumField(dTrips, "filled_back"),
+      thermosBack: sumField(dTrips, "thermos_back"),
       waste: tripLossTotal(dTrips),
       leak: sumField(dTrips, "leak_jars"),
       broke: sumField(dTrips, "broke_jars"),
       rokda: sumField(dTrips, "rokda_jars"),
       pending: cust.reduce((s, c) => s + Math.max(0, c.pendingJars || 0), 0),
+      pendingThermos: cust.reduce((s, c) => s + Math.max(0, c.pendingThermos || 0), 0),
       stops: rows.length,
       ...plantReturnSummary(plantByDate(dTrips, rows)),
     };
@@ -1173,6 +1448,7 @@ export function ownerPeriodStats() {
     remaining: filledOut - jarsToCustomers - rokda - waste,
     netPlant: filledOut - filledBack,
     pendingMarket,
+    pendingThermos,
     byDriver,
     counted: returns.counted,
     expectTotal: returns.expectTotal,
@@ -1240,6 +1516,17 @@ export function stopMarketPreview(customer, entry) {
   const open = Math.max(0, customer?.pendingJars || 0);
   const given = Number(entry?.jarsGiven) || 0;
   const empty = Number(entry?.emptyCollected) || 0;
+  const available = open + given;
+  if (empty <= available) {
+    return { after: available - empty, extra: 0 };
+  }
+  return { after: 0, extra: empty - available };
+}
+
+export function stopThermosPreview(customer, entry) {
+  const open = Math.max(0, customer?.pendingThermos || 0);
+  const given = Number(entry?.thermosGiven) || 0;
+  const empty = Number(entry?.thermosCollected) || 0;
   const available = open + given;
   if (empty <= available) {
     return { after: available - empty, extra: 0 };
@@ -1446,34 +1733,88 @@ export function billDate(str) {
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+export function setDropPlace(dateStr, customerId, place, stopNo) {
+  if (!canEditWorkDate(dateStr)) return;
+  const e = getDay(dateStr).entries[customerId];
+  if (!e) return;
+  const s = getStop(e, stopNo);
+  if (!s) return;
+  s.dropPlace = String(place || "").trim().slice(0, 120);
+  syncEntryFromStops(e);
+  queuePersistEntry(dateStr, customerId);
+}
+
+export function addOrderStop(dateStr, customerId) {
+  if (!canEditWorkDate(dateStr)) return;
+  const e = getDay(dateStr).entries[customerId];
+  if (!e || e.status === "complete") return;
+  ensureStops(e);
+  if (e.stops.length >= 8) return;
+  const next = Math.max(0, ...e.stops.map((s) => Number(s.stopNo) || 0)) + 1;
+  e.stops.push(emptyStop(next));
+  syncEntryFromStops(e);
+  queuePersistEntry(dateStr, customerId);
+}
+
+export function removeOrderStop(dateStr, customerId, stopNo) {
+  if (!canEditWorkDate(dateStr)) return;
+  const e = getDay(dateStr).entries[customerId];
+  if (!e || e.status === "complete") return;
+  ensureStops(e);
+  const n = Number(stopNo) || 0;
+  if (e.stops.length <= 1 || n <= 1) return;
+  e.stops = e.stops.filter((s) => Number(s.stopNo) !== n);
+  syncEntryFromStops(e);
+  queuePersistEntry(dateStr, customerId);
+}
+
 export function ownerCustomerLedger(customerId) {
   const customer = getCustomer(customerId);
   const driver = state.owner.drivers.find((d) => d.id === customer?.device_id);
+  const isOrder = customerDeliveryType(customer) === "order";
   const rows = (state.owner.rangeDeliveries || [])
     .filter((r) => r.customer_id === customerId && r.status === "complete")
     .sort((a, b) => String(a.work_date).localeCompare(String(b.work_date)));
-  const byDate = {};
+  const byKey = {};
   for (const r of rows) {
-    const key = r.work_date;
-    if (!byDate[key]) byDate[key] = { date: key, jars: 0, empty: 0 };
-    byDate[key].jars += r.jars_given || 0;
-    byDate[key].empty += r.empty_collected || 0;
+    const place = isOrder ? String(r.drop_place || "").trim() : "";
+    const key = isOrder ? `${r.work_date}|${place}` : r.work_date;
+    if (!byKey[key]) {
+      byKey[key] = { date: r.work_date, place, jars: 0, empty: 0, thermos: 0 };
+    }
+    byKey[key].jars += r.jars_given || 0;
+    byKey[key].empty += r.empty_collected || 0;
+    byKey[key].thermos += r.thermos_given || 0;
   }
-  const lines = Object.values(byDate).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const lines = Object.values(byKey).sort((a, b) =>
+    String(a.date).localeCompare(String(b.date)) || String(a.place || "").localeCompare(String(b.place || ""))
+  );
   const jars = lines.reduce((s, l) => s + l.jars, 0);
+  const thermos = lines.reduce((s, l) => s + (l.thermos || 0), 0);
   const empty = lines.reduce((s, l) => s + l.empty, 0);
-  const rate = Number(customer?.jarRate) || 0;
+  const jarRate = Number(customer?.jarRate) || 0;
+  const thermosRate = Number(customer?.thermosRate) || 0;
+  const jarAmount = jars * jarRate;
+  const thermosAmount = thermos * thermosRate;
+  const amount = jarAmount + thermosAmount;
   const money = ownerCustomerMoney(customerId);
   return {
     customer,
     driver,
+    isOrder,
     rows,
     lines,
     jars,
+    thermos,
     empty,
     pending: customer?.pendingJars || 0,
-    rate,
-    amount: jars * rate,
+    pendingThermos: customer?.pendingThermos || 0,
+    rate: jarRate,
+    jarRate,
+    thermosRate,
+    jarAmount,
+    thermosAmount,
+    amount,
     ...money,
   };
 }
